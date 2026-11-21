@@ -29,10 +29,18 @@ def api_root_view(request):
         "version": "1.0.0",
         "endpoints": {
             "admin_panel": "/admin/",
-            "auth_register": "/api/auth/register/",
-            "auth_login": "/api/auth/login/",
-            "auth_token_refresh": "/api/auth/token/refresh/",
-            "auth_me": "/api/auth/me/",
+            "auth": {
+                "register": "/api/auth/register/",
+                "login": "/api/auth/login/",
+                "token_refresh": "/api/auth/token/refresh/",
+                "me": "/api/auth/me/",
+            },
+            "inventory": {
+                "categories": "/api/inventory/categories/",
+                "products": "/api/inventory/products/",
+                "by_barcode": "/api/inventory/products/by-barcode/?code=<barcode>",
+                "upload_csv": "/api/inventory/products/upload-csv/",
+            }
         }
     })
 
@@ -41,4 +49,5 @@ urlpatterns = [
     path('', api_root_view, name='api_root'),
     path('admin/', admin.site.urls),
     path('api/auth/', include('core.urls')),
+    path('api/inventory/', include('inventory.urls')),
 ]
