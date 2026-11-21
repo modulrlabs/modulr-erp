@@ -17,6 +17,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from django.http import JsonResponse
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularSwaggerView,
+    SpectacularRedocView,
+)
 
 
 def api_root_view(request):
@@ -27,6 +32,11 @@ def api_root_view(request):
         "status": "healthy",
         "project": "Businezz ERP + POS Multi-Tenant SaaS",
         "version": "1.0.0",
+        "documentation": {
+            "swagger_ui": "/api/docs/",
+            "redoc": "/api/redoc/",
+            "openapi_schema": "/api/schema/",
+        },
         "endpoints": {
             "admin_panel": "/admin/",
             "auth": {
@@ -43,6 +53,7 @@ def api_root_view(request):
             },
             "sales": {
                 "invoices": "/api/sales/invoices/",
+                "dashboard": "/api/sales/dashboard/",
                 "customers": "/api/sales/customers/",
                 "credit_payments": "/api/sales/credit-payments/",
                 "pd_cheques": "/api/sales/pd-cheques/",
@@ -55,6 +66,9 @@ def api_root_view(request):
 urlpatterns = [
     path('', api_root_view, name='api_root'),
     path('admin/', admin.site.urls),
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     path('api/auth/', include('core.urls')),
     path('api/inventory/', include('inventory.urls')),
     path('api/sales/', include('sales.urls')),
