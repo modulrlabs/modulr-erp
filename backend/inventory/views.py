@@ -1,3 +1,232 @@
-from django.shortcuts import render
+import csv
+import io
+from decimal import Decimal, InvalidOperation
+from django.db import transaction, models
+from django.db.models import Q, F
+from rest_framework import viewsets, permissions, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser
 
-# Create your views here.
+from .models import Category, Product
+from .serializers import (
+    CategorySerializer,
+    ProductSerializer,
+    ProductCSVUploadSerializer,
+)
+from .permissions import IsShopOwnerOrReadOnly, IsShopOwner
+
+
+class CategoryViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing product categories.
+    - Read (GET): Allowed for both Cashiers and Owners.
+    - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    """
+    serializer_class = CategorySerializer
+    permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
+
+    def get_queryset(self):
+        """
+        WHY: Multi-tenancy rule (ARCHITECTURE.md Rule 1).
+        All category queries are strictly restricted to the authenticated user's shop.
+        """
+        user = self.request.user
+        if not user or not user.is_authenticated or not user.shop:
+            return Category.objects.none()
+        return Category.objects.filter(shop=user.shop)
+
+    def perform_create(self, serializer):
+        """
+        WHY: Securely attach the active shop from the user session,
+        preventing client manipulation of tenant ownership.
+        """
+        serializer.save(shop=self.request.user.shop)
+
+
+class ProductViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing products, barcode lookups, and bulk CSV imports.
+    - Read (GET): Allowed for both Cashiers and Owners.
+    - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    """
+    serializer_class = ProductSerializer
+    permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
+
+    def get_queryset(self):
+        """
+        WHY: Multi-tenancy query scoping with flexible search and filters for POS.
+        """
+        user = self.request.user
+        if not user or not user.is_authenticated or not user.shop:
+            return Product.objects.none()
+
+        queryset = Product.objects.filter(shop=user.shop).select_related('category')
+
+        # 1. Text Search (searches name OR barcode)
+        search_query = self.request.query_params.get('search', '').strip()
+        if search_query:
+            queryset = queryset.filter(
+                Q(name__icontains=search_query) |
+                Q(barcode__icontains=search_query)
+            )
+
+        # 2. Filter by Category
+        category_id = self.request.query_params.get('category')
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+
+        # 3. Filter Low Stock Items (useful for inventory management)
+        low_stock = self.request.query_params.get('low_stock', '').lower()
+        if low_stock in ('true', '1'):
+            queryset = queryset.filter(stock_quantity__lte=F('reorder_level'))
+
+        return queryset
+
+    def perform_create(self, serializer):
+        """
+        WHY: Ensure newly created product belongs to the user's shop.
+        """
+        serializer.save(shop=self.request.user.shop)
+
+    @action(detail=False, methods=['get'], url_path='by-barcode')
+    def by_barcode(self, request):
+        """
+        Fast lookup endpoint for POS barcode scanners:
+        GET /api/inventory/products/by-barcode/?code=5449000000996
+
+        WHY:
+        When a cashier scans an item with a handheld barcode scanner, the POS UI
+        needs an instantaneous response without paginating through a general list.
+        """
+        barcode = request.query_params.get('code', '').strip()
+
+        if not barcode:
+            return Response(
+                {"detail": "Barcode query parameter 'code' is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        product = self.get_queryset().filter(barcode=barcode).first()
+
+        if not product:
+            return Response(
+                {"detail": f"Product with barcode '{barcode}' was not found in your inventory."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = self.get_serializer(product)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='upload-csv',
+        permission_classes=[permissions.IsAuthenticated, IsShopOwner],
+        parser_classes=[MultiPartParser, FormParser]
+    )
+    def upload_csv(self, request):
+        """
+        Bulk CSV inventory import endpoint:
+        POST /api/inventory/products/upload-csv/
+
+        Expected CSV columns:
+        name, barcode, category, cost_price, selling_price, stock_quantity, reorder_level
+
+        WHY transaction.atomic():
+        Bulk imports must be reliable and transactional. If a catastrophic format
+        error occurs halfway through, we can report clean feedback without leaving
+        partially imported inventory in an inconsistent state.
+        """
+        upload_serializer = ProductCSVUploadSerializer(data=request.data)
+        upload_serializer.is_valid(raise_exception=True)
+
+        csv_file = upload_serializer.validated_data['file']
+        shop = request.user.shop
+
+        try:
+            # Decode CSV content into text
+            decoded_file = csv_file.read().decode('utf-8-sig')
+            reader = csv.DictReader(io.StringIO(decoded_file))
+        except Exception as e:
+            return Response(
+                {"detail": f"Failed to parse CSV file: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Normalize column header names to lowercase
+        if not reader.fieldnames:
+            return Response(
+                {"detail": "Uploaded CSV file is empty."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        created_count = 0
+        updated_count = 0
+        errors = []
+
+        with transaction.atomic():
+            for row_idx, row in enumerate(reader, start=2):  # start=2 considering header is row 1
+                row_cleaned = {k.strip().lower(): v.strip() for k, v in row.items() if k}
+
+                name = row_cleaned.get('name')
+                if not name:
+                    errors.append(f"Row {row_idx}: 'name' is required.")
+                    continue
+
+                barcode = row_cleaned.get('barcode') or None
+                category_name = row_cleaned.get('category')
+
+                # Parse prices and stock
+                try:
+                    selling_price = Decimal(row_cleaned.get('selling_price', '0.00'))
+                    cost_price = Decimal(row_cleaned.get('cost_price', '0.00'))
+                    stock_quantity = int(row_cleaned.get('stock_quantity', '0'))
+                    reorder_level = int(row_cleaned.get('reorder_level', '5'))
+                except (InvalidOperation, ValueError):
+                    errors.append(f"Row {row_idx} ({name}): Invalid numerical format in price or quantity.")
+                    continue
+
+                # Resolve or auto-create category within this shop
+                category_instance = None
+                if category_name:
+                    category_instance, _ = Category.objects.get_or_create(
+                        shop=shop,
+                        name=category_name
+                    )
+
+                # Upsert Product: If barcode matches existing product in this shop, update it
+                product = None
+                if barcode:
+                    product = Product.objects.filter(shop=shop, barcode=barcode).first()
+
+                if product:
+                    # Update existing product
+                    product.name = name
+                    product.category = category_instance
+                    product.cost_price = cost_price
+                    product.selling_price = selling_price
+                    product.stock_quantity = stock_quantity
+                    product.reorder_level = reorder_level
+                    product.save()
+                    updated_count += 1
+                else:
+                    # Create new product
+                    Product.objects.create(
+                        shop=shop,
+                        category=category_instance,
+                        name=name,
+                        barcode=barcode,
+                        cost_price=cost_price,
+                        selling_price=selling_price,
+                        stock_quantity=stock_quantity,
+                        reorder_level=reorder_level,
+                    )
+                    created_count += 1
+
+        return Response({
+            "message": "CSV inventory processing completed.",
+            "created": created_count,
+            "updated": updated_count,
+            "errors": errors,
+        }, status=status.HTTP_200_OK if not errors else status.HTTP_207_MULTI_STATUS)

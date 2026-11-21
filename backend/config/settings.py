@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 
 from pathlib import Path
 import os
+from datetime import timedelta
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -26,7 +27,7 @@ load_dotenv(BASE_DIR.parent / '.env')
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-(x$u0(#i!tc20^uol*3ka8)mkmm=ph^z2txkrtd9@07wr5nrzn'
+SECRET_KEY = os.environ.get('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -46,7 +47,9 @@ INSTALLED_APPS = [
 
     # Third-party packages
     'rest_framework',
+    'rest_framework_simplejwt',
     'corsheaders',
+    'drf_spectacular',
 
     # Local SaaS apps
     'core',
@@ -59,6 +62,7 @@ AUTH_USER_MODEL = 'core.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -157,3 +161,63 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
+
+# ------------------------------------------------------------------------------
+# Django REST Framework Configuration
+# WHY:
+# 1. JWTAuthentication as default ensures all incoming requests look for 
+#    'Authorization: Bearer <token>' headers.
+# 2. IsAuthenticated as default locks down all endpoints across the SaaS by default.
+#    Public endpoints (like Login and Register) must explicitly declare AllowAny.
+# ------------------------------------------------------------------------------
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+# ------------------------------------------------------------------------------
+# drf-spectacular (OpenAPI 3.0 / Swagger UI)
+# WHY:
+# Provides interactive, auto-generated documentation and sandbox for all REST endpoints.
+# ------------------------------------------------------------------------------
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Businezz ERP + POS Multi-Tenant SaaS API',
+    'DESCRIPTION': 'Modular, Multi-Tenant ERP & POS Backend built with Django, DRF, and PostgreSQL.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+}
+
+# ------------------------------------------------------------------------------
+# SimpleJWT Configuration
+# WHY:
+# - Short-lived Access Token (1 hour): Minimizes damage if a token is intercepted.
+# - Long-lived Refresh Token (7 days): Keeps cashiers and owners logged in without
+#   forcing them to re-enter passwords daily.
+# - Token rotation: Issuing a new refresh token whenever one is refreshed helps detect
+#   token theft.
+# ------------------------------------------------------------------------------
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': False,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+}
+
+# ------------------------------------------------------------------------------
+# CORS Configuration (Cross-Origin Resource Sharing)
+# WHY:
+# The React/Vite frontend runs on a different port (e.g., http://localhost:5173).
+# Browsers block cross-origin requests unless the backend explicitly permits them.
+# ------------------------------------------------------------------------------
+CORS_ALLOW_ALL_ORIGINS = True
+

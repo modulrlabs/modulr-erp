@@ -15,8 +15,61 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
+from django.http import JsonResponse
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularSwaggerView,
+    SpectacularRedocView,
+)
+
+
+def api_root_view(request):
+    """
+    Root endpoint view providing API health status and available routes.
+    """
+    return JsonResponse({
+        "status": "healthy",
+        "project": "Businezz ERP + POS Multi-Tenant SaaS",
+        "version": "1.0.0",
+        "documentation": {
+            "swagger_ui": "/api/docs/",
+            "redoc": "/api/redoc/",
+            "openapi_schema": "/api/schema/",
+        },
+        "endpoints": {
+            "admin_panel": "/admin/",
+            "auth": {
+                "register": "/api/auth/register/",
+                "login": "/api/auth/login/",
+                "token_refresh": "/api/auth/token/refresh/",
+                "me": "/api/auth/me/",
+            },
+            "inventory": {
+                "categories": "/api/inventory/categories/",
+                "products": "/api/inventory/products/",
+                "by_barcode": "/api/inventory/products/by-barcode/?code=<barcode>",
+                "upload_csv": "/api/inventory/products/upload-csv/",
+            },
+            "sales": {
+                "invoices": "/api/sales/invoices/",
+                "dashboard": "/api/sales/dashboard/",
+                "customers": "/api/sales/customers/",
+                "credit_payments": "/api/sales/credit-payments/",
+                "pd_cheques": "/api/sales/pd-cheques/",
+                "upcoming_cheques": "/api/sales/pd-cheques/upcoming/",
+            }
+        }
+    })
+
 
 urlpatterns = [
+    path('', api_root_view, name='api_root'),
     path('admin/', admin.site.urls),
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    path('api/auth/', include('core.urls')),
+    path('api/inventory/', include('inventory.urls')),
+    path('api/sales/', include('sales.urls')),
 ]
