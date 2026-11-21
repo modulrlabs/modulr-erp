@@ -40,6 +40,13 @@ def api_root_view(request):
                 "products": "/api/inventory/products/",
                 "by_barcode": "/api/inventory/products/by-barcode/?code=<barcode>",
                 "upload_csv": "/api/inventory/products/upload-csv/",
+            },
+            "sales": {
+                "invoices": "/api/sales/invoices/",
+                "customers": "/api/sales/customers/",
+                "credit_payments": "/api/sales/credit-payments/",
+                "pd_cheques": "/api/sales/pd-cheques/",
+                "upcoming_cheques": "/api/sales/pd-cheques/upcoming/",
             }
         }
     })
@@ -50,4 +57,5 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('core.urls')),
     path('api/inventory/', include('inventory.urls')),
+    path('api/sales/', include('sales.urls')),
 ]
