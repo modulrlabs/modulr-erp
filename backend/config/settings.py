@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
+    'drf_spectacular',
 
     # Local SaaS apps
     'core',
@@ -176,6 +177,20 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+# ------------------------------------------------------------------------------
+# drf-spectacular (OpenAPI 3.0 / Swagger UI)
+# WHY:
+# Provides interactive, auto-generated documentation and sandbox for all REST endpoints.
+# ------------------------------------------------------------------------------
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Businezz ERP + POS Multi-Tenant SaaS API',
+    'DESCRIPTION': 'Modular, Multi-Tenant ERP & POS Backend built with Django, DRF, and PostgreSQL.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
 }
 
 # ------------------------------------------------------------------------------

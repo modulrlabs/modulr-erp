@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
+from drf_spectacular.utils import extend_schema
 from .serializers import (
     ShopRegisterSerializer,
     CustomTokenObtainPairSerializer,
@@ -21,6 +22,11 @@ class RegisterView(APIView):
     """
     permission_classes = [permissions.AllowAny]
 
+    @extend_schema(
+        request=ShopRegisterSerializer,
+        responses={201: ShopRegisterSerializer},
+        summary="Register a new Shop & Owner account"
+    )
     def post(self, request, *args, **kwargs):
         serializer = ShopRegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -77,6 +83,10 @@ class CurrentUserView(APIView):
     """
     permission_classes = [permissions.IsAuthenticated]
 
+    @extend_schema(
+        responses={200: UserMeSerializer},
+        summary="Get active authenticated user and tenant profile"
+    )
     def get(self, request, *args, **kwargs):
         serializer = UserMeSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)

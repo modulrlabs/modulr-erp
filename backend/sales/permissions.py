@@ -1,6 +1,25 @@
 from rest_framework import permissions
 
 
+class IsShopOwner(permissions.BasePermission):
+    """
+    Strict permission ensuring that only users with role='OWNER' can access
+    the view (e.g. Owner Dashboard Analytics).
+
+    WHY:
+    Cashiers must not have access to shop financial metrics, gross profits,
+    cash collections, or high-level business analytics.
+    """
+    message = "Access restricted: Only shop owners can view business analytics."
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and getattr(request.user, 'is_owner', False)
+        )
+
+
 class IsCreditModuleEnabled(permissions.BasePermission):
     """
     Permission class that enforces the 'enable_credit_module' feature flag on the Shop model.
