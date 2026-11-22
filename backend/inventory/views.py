@@ -1,20 +1,21 @@
 import csv
 import io
 from decimal import Decimal, InvalidOperation
-from django.db import transaction, models
-from django.db.models import Q, F
-from rest_framework import viewsets, permissions, status
+
+from django.db import transaction
+from django.db.models import F, Q
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser
 
 from .models import Category, Product
+from .permissions import IsShopOwner, IsShopOwnerOrReadOnly
 from .serializers import (
     CategorySerializer,
-    ProductSerializer,
     ProductCSVUploadSerializer,
+    ProductSerializer,
 )
-from .permissions import IsShopOwnerOrReadOnly, IsShopOwner
 
 
 class CategoryViewSet(viewsets.ModelViewSet):

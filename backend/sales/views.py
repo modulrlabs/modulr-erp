@@ -1,24 +1,26 @@
-from decimal import Decimal
 from datetime import timedelta
-from django.utils import timezone
+from decimal import Decimal
+
 from django.db import models
-from django.db.models import Q, F, Sum, Count
-from rest_framework import viewsets, permissions, status
-from rest_framework.views import APIView
+from django.db.models import Count, F, Q, Sum
+from django.utils import timezone
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from rest_framework.views import APIView
 
-from .models import Customer, Invoice, InvoiceItem, CreditPayment, PDCheque
 from inventory.models import Product
+
+from .models import CreditPayment, Customer, Invoice, InvoiceItem, PDCheque
+from .permissions import IsCreditModuleEnabled, IsShopOwner
 from .serializers import (
-    CustomerSerializer,
-    InvoiceSerializer,
-    InvoiceCheckoutSerializer,
     CreditPaymentSerializer,
+    CustomerSerializer,
+    InvoiceCheckoutSerializer,
+    InvoiceSerializer,
     PDChequeSerializer,
 )
-from .permissions import IsCreditModuleEnabled, IsShopOwner
 
 
 class CustomerViewSet(viewsets.ModelViewSet):
@@ -204,7 +206,10 @@ class DashboardAnalyticsView(APIView):
 
     @extend_schema(
         summary="Owner Business Dashboard Analytics",
-        description="Calculates real-time financial KPIs (revenue, gross profit, cash collected, credit issued, low stock alerts, and top selling products).",
+        description=(
+            "Calculates real-time financial KPIs (revenue, gross profit, cash collected, "
+            "credit issued, low stock alerts, and top selling products)."
+        ),
         parameters=[
             OpenApiParameter(
                 name='days',

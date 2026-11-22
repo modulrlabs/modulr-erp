@@ -1,11 +1,13 @@
 import urllib.parse
 from decimal import Decimal
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Customer, Invoice, InvoiceItem, CreditPayment, PDCheque
 from inventory.models import Product
+
+from .models import CreditPayment, Customer, Invoice, InvoiceItem, PDCheque
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -198,7 +200,8 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
             total_amount = max(Decimal('0.00'), subtotal - discount)
 
             # If amount_paid wasn't specified for CASH/CARD, assume fully paid
-            if payment_method in (Invoice.PaymentMethod.CASH, Invoice.PaymentMethod.CARD) and amount_paid == Decimal('0.00'):
+            is_cash_or_card = payment_method in (Invoice.PaymentMethod.CASH, Invoice.PaymentMethod.CARD)
+            if is_cash_or_card and amount_paid == Decimal('0.00'):
                 amount_paid = total_amount
 
             # Calculate remaining credit (debt)

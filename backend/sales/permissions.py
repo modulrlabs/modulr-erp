@@ -29,7 +29,10 @@ class IsCreditModuleEnabled(permissions.BasePermission):
     Shops on the basic POS plan cannot access Customer Credit Ledgers or PD Cheque
     management unless the shop owner subscribes to the Credit module.
     """
-    message = "The Customer Credit & Cheque module is not enabled for your shop subscription. Please contact support to upgrade."
+    message = (
+        "The Customer Credit & Cheque module is not enabled for your shop subscription. "
+        "Please contact support to upgrade."
+    )
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:

@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import Customer, Invoice, InvoiceItem, CreditPayment, PDCheque
+
+from .models import CreditPayment, Customer, Invoice, InvoiceItem, PDCheque
 
 
 @admin.register(Customer)

@@ -1,0 +1,54 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+  test-and-lint:
+    name: Lint, Audit & Test Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements.txt'
+
+      - name: Install Runtime and Dev Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Code Quality & Linting (Ruff)
+        run: ruff check .
+
+      - name: Static Security Scan (Bandit)
+        run: bandit -r . -x ./.venv,./venv,*/tests.py
+
+      - name: Dependency Vulnerability Audit (pip-audit)
+        run: pip-audit -r requirements.txt
+
+      - name: Run Django Automated Test Suite
+        env:
+          SECRET_KEY: ci-test-secret-key-not-for-production
+          DEBUG: 'False'
+          USE_POSTGRES: 'False'
+          ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+        run: python manage.py test

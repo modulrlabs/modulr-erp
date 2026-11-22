@@ -1,4 +1,5 @@
 from django.db import models
+
 from core.models import ShopAwareModel
 
 
@@ -53,12 +54,13 @@ class Product(ShopAwareModel):
         max_length=255,
         help_text="Product name (e.g., 'Anchor Full Cream Milk 400g')."
     )
-    barcode = models.CharField(
+    # null=True is necessary for unique_together ('shop', 'barcode') so multiple barcode-less items don't collide
+    barcode = models.CharField(  # noqa: DJ001
         max_length=100,
         blank=True,
         null=True,
         db_index=True,
-        help_text="Barcode / EAN / UPC for fast POS scanning. Indexed for millisecond lookups."
+        help_text="Barcode / EAN / UPC for fast POS scanning. Indexed for millisecond lookups.",
     )
     cost_price = models.DecimalField(
         max_digits=10,
