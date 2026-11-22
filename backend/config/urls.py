@@ -43,6 +43,7 @@ def api_root_view(request):
                 "register": "/api/auth/register/",
                 "login": "/api/auth/login/",
                 "refresh": "/api/auth/token/refresh/",
+                "logout": "/api/auth/logout/",
                 "me": "/api/auth/me/",
             },
             "inventory": {
