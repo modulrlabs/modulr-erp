@@ -1,14 +1,14 @@
-from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.db import models
 
 
 class Shop(models.Model):
     """
     Tenant model representing an individual shop or business entity.
-    
+
     WHY:
     In a row-level multi-tenant SaaS architecture, the Shop is the root boundary
-    of data isolation. Every transaction, product, customer, and staff member 
+    of data isolation. Every transaction, product, customer, and staff member
     belongs to a specific Shop.
     """
     name = models.CharField(
@@ -32,7 +32,7 @@ class Shop(models.Model):
     # --------------------------------------------------------------------------
     # Modular Feature Flags
     # WHY:
-    # Instead of maintaining separate codebases or custom deployments for different 
+    # Instead of maintaining separate codebases or custom deployments for different
     # clients, boolean flags on the Shop model let us toggle ERP modules on/off dynamically.
     # --------------------------------------------------------------------------
     enable_credit_module = models.BooleanField(
@@ -66,7 +66,7 @@ class Shop(models.Model):
 class User(AbstractUser):
     """
     Custom user model representing shop staff (Owners, Cashiers) and platform admins.
-    
+
     WHY:
     Extending AbstractUser gives us full control over user fields (adding 'shop' and 'role')
     from the very beginning of the project, while retaining all built-in Django auth mechanisms
@@ -92,7 +92,10 @@ class User(AbstractUser):
         max_length=10,
         choices=Role.choices,
         default=Role.CASHIER,
-        help_text="Defines the user's operational privileges (Owner has full store control; Cashier is restricted to POS checkout)."
+        help_text=(
+            "Defines the user's operational privileges "
+            "(Owner has full store control; Cashier is restricted to POS checkout)."
+        ),
     )
 
     @property
@@ -117,11 +120,11 @@ class User(AbstractUser):
 class ShopAwareModel(models.Model):
     """
     Abstract base model that enforces row-level multi-tenancy across all business models.
-    
+
     WHY:
-    Any future business entity (e.g., Product, Sale, Customer, Category) in other apps 
+    Any future business entity (e.g., Product, Sale, Customer, Category) in other apps
     (like 'inventory' or 'sales') must inherit from this base class.
-    This guarantees that every record in the database is automatically stamped with a 
+    This guarantees that every record in the database is automatically stamped with a
     'shop' foreign key and timestamp fields, adhering to our DRY architecture.
     """
     shop = models.ForeignKey(

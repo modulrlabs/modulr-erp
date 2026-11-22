@@ -1,11 +1,11 @@
 from decimal import Decimal
-from django.urls import reverse
+
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from core.models import Shop, User
-from inventory.models import Product, Category
-from sales.models import Customer, Invoice, InvoiceItem, PDCheque
+from inventory.models import Product
+from sales.models import Customer, Invoice, InvoiceItem
 
 
 class MultiTenantDataIsolationTests(APITestCase):

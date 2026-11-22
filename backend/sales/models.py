@@ -1,4 +1,5 @@
 from django.db import models
+
 from core.models import ShopAwareModel, User
 from inventory.models import Product
 
@@ -6,7 +7,7 @@ from inventory.models import Product
 class Customer(ShopAwareModel):
     """
     Represents a client or wholesale customer of a shop.
-    
+
     WHY:
     Tracks individual customer details and their cumulative credit balance.
     Walk-in retail customers don't require a record, but anyone taking items on
@@ -44,7 +45,7 @@ class Customer(ShopAwareModel):
 class Invoice(ShopAwareModel):
     """
     Header record for a POS sale / transaction.
-    
+
     WHY:
     Represents the financial receipt for a completed checkout.
     """
@@ -127,7 +128,7 @@ class Invoice(ShopAwareModel):
 class InvoiceItem(ShopAwareModel):
     """
     Individual line item in an Invoice.
-    
+
     WHY cost_price_at_sale:
     Wholesale product costs change over time due to inflation or new supplier batches.
     We snapshot the exact cost price at the moment of checkout so historic gross margin

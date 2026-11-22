@@ -10,9 +10,10 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
-from pathlib import Path
 import os
 from datetime import timedelta
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -27,12 +28,13 @@ load_dotenv(BASE_DIR.parent / '.env')
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY')
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-ci-default-key-change-in-production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = []
+raw_allowed_hosts = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver')
+ALLOWED_HOSTS = [h.strip() for h in raw_allowed_hosts.split(',') if h.strip()]
 
 
 # Application definition
@@ -165,7 +167,7 @@ MAILERS = {
 # ------------------------------------------------------------------------------
 # Django REST Framework Configuration
 # WHY:
-# 1. JWTAuthentication as default ensures all incoming requests look for 
+# 1. JWTAuthentication as default ensures all incoming requests look for
 #    'Authorization: Bearer <token>' headers.
 # 2. IsAuthenticated as default locks down all endpoints across the SaaS by default.
 #    Public endpoints (like Login and Register) must explicitly declare AllowAny.
@@ -214,10 +216,28 @@ SIMPLE_JWT = {
 }
 
 # ------------------------------------------------------------------------------
-# CORS Configuration (Cross-Origin Resource Sharing)
+# CORS & CSRF Configuration (Cross-Origin Resource Sharing)
 # WHY:
 # The React/Vite frontend runs on a different port (e.g., http://localhost:5173).
 # Browsers block cross-origin requests unless the backend explicitly permits them.
 # ------------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+cors_origins_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+if cors_origins_env:
+    CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()]
+    CORS_ALLOW_ALL_ORIGINS = False
+else:
+    CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
+if csrf_origins_env:
+    CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()]
+
+# ------------------------------------------------------------------------------
+# Authentication & Cookie Hardening
+# ------------------------------------------------------------------------------
+AUTH_REFRESH_IN_BODY = os.environ.get('AUTH_REFRESH_IN_BODY', 'False').lower() in ('true', '1', 'yes')
+SESSION_COOKIE_SECURE = os.environ.get('COOKIE_SECURE', 'False').lower() in ('true', '1', 'yes')
+CSRF_COOKIE_SECURE = os.environ.get('COOKIE_SECURE', 'False').lower() in ('true', '1', 'yes')
+SESSION_COOKIE_SAMESITE = os.environ.get('COOKIE_SAMESITE', 'Lax')
+CSRF_COOKIE_SAMESITE = os.environ.get('COOKIE_SAMESITE', 'Lax')
 

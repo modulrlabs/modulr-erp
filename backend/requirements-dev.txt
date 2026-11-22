@@ -1,0 +1,7 @@
+# ==============================================================================
+# Modulr ERP - Development & Security Quality Tools
+# Install with: pip install -r requirements-dev.txt
+# ==============================================================================
+ruff==0.17.6
+bandit==1.9.4
+pip-audit==2.10.1
