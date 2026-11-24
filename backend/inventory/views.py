@@ -6,8 +6,11 @@ from django.db import transaction
 from django.db.models import F, Q
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
+
+from core.mixins import ShopScopedViewSetMixin
 
 from .models import Category, Product
 from .permissions import IsShopOwner, IsShopOwnerOrReadOnly
@@ -18,51 +21,35 @@ from .serializers import (
 )
 
 
-class CategoryViewSet(viewsets.ModelViewSet):
+class CategoryViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing product categories.
     - Read (GET): Allowed for both Cashiers and Owners.
     - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
+    queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
 
-    def get_queryset(self):
-        """
-        WHY: Multi-tenancy rule (ARCHITECTURE.md Rule 1).
-        All category queries are strictly restricted to the authenticated user's shop.
-        """
-        user = self.request.user
-        if not user or not user.is_authenticated or not user.shop:
-            return Category.objects.none()
-        return Category.objects.filter(shop=user.shop)
 
-    def perform_create(self, serializer):
-        """
-        WHY: Securely attach the active shop from the user session,
-        preventing client manipulation of tenant ownership.
-        """
-        serializer.save(shop=self.request.user.shop)
-
-
-class ProductViewSet(viewsets.ModelViewSet):
+class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing products, barcode lookups, and bulk CSV imports.
     - Read (GET): Allowed for both Cashiers and Owners.
     - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
+    queryset = Product.objects.all().select_related('category')
     serializer_class = ProductSerializer
     permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
 
     def get_queryset(self):
         """
-        WHY: Multi-tenancy query scoping with flexible search and filters for POS.
+        WHY: Systematic tenant scoping via super().get_queryset() combined with
+        POS search and filtering query parameters.
         """
-        user = self.request.user
-        if not user or not user.is_authenticated or not user.shop:
-            return Product.objects.none()
-
-        queryset = Product.objects.filter(shop=user.shop).select_related('category')
+        queryset = super().get_queryset()
 
         # 1. Text Search (searches name OR barcode)
         search_query = self.request.query_params.get('search', '').strip()
@@ -84,12 +71,6 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    def perform_create(self, serializer):
-        """
-        WHY: Ensure newly created product belongs to the user's shop.
-        """
-        serializer.save(shop=self.request.user.shop)
-
     @action(detail=False, methods=['get'], url_path='by-barcode')
     def by_barcode(self, request):
         """
@@ -99,6 +80,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         WHY:
         When a cashier scans an item with a handheld barcode scanner, the POS UI
         needs an instantaneous response without paginating through a general list.
+        Scoped strictly through self.get_queryset() to prevent cross-tenant leakage.
         """
         barcode = request.query_params.get('code', '').strip()
 
@@ -139,11 +121,14 @@ class ProductViewSet(viewsets.ModelViewSet):
         error occurs halfway through, we can report clean feedback without leaving
         partially imported inventory in an inconsistent state.
         """
+        shop = getattr(request.user, 'shop', None)
+        if not shop or not shop.is_active:
+            raise PermissionDenied("Active shop membership required.")
+
         upload_serializer = ProductCSVUploadSerializer(data=request.data)
         upload_serializer.is_valid(raise_exception=True)
 
         csv_file = upload_serializer.validated_data['file']
-        shop = request.user.shop
 
         try:
             # Decode CSV content into text
