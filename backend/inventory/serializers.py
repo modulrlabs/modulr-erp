@@ -19,13 +19,14 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = (
             'id',
+            'public_id',
             'name',
             'description',
             'product_count',
             'created_at',
             'updated_at',
         )
-        read_only_fields = ('id', 'created_at', 'updated_at', 'product_count')
+        read_only_fields = ('id', 'public_id', 'created_at', 'updated_at', 'product_count')
 
     def validate_name(self, value):
         """
@@ -71,6 +72,7 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = (
             'id',
+            'public_id',
             'category',
             'category_name',
             'name',
@@ -83,7 +85,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         )
-        read_only_fields = ('id', 'is_low_stock', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'public_id', 'is_low_stock', 'created_at', 'updated_at')
 
     def __init__(self, *args, **kwargs):
         """

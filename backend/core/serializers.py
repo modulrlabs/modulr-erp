@@ -14,6 +14,7 @@ class ShopSerializer(serializers.ModelSerializer):
         model = Shop
         fields = (
             'id',
+            'public_id',
             'name',
             'address',
             'phone',
@@ -23,7 +24,7 @@ class ShopSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         )
-        read_only_fields = ('id', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'public_id', 'created_at', 'updated_at')
 
 
 class UserMeSerializer(serializers.ModelSerializer):
@@ -221,6 +222,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if user.shop:
             data['shop'] = {
                 'id': user.shop.id,
+                'public_id': str(user.shop.public_id),
                 'name': user.shop.name,
                 'address': user.shop.address,
                 'phone': user.shop.phone,
