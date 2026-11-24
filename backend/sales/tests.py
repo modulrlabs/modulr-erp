@@ -83,8 +83,8 @@ class MultiTenantDataIsolationTests(APITestCase):
         self.assertIn("INV-A-0001", invoice_numbers)
         self.assertNotIn("INV-B-0001", invoice_numbers)
 
-        # 2. Direct IDOR attempt: Retrieve Shop B's invoice ID
-        detail_response = self.client.get(f'/api/sales/invoices/{self.invoice_b.id}/')
+        # 2. Direct IDOR attempt: Retrieve Shop B's invoice by public_id
+        detail_response = self.client.get(f'/api/sales/invoices/{self.invoice_b.public_id}/')
         self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
 
 

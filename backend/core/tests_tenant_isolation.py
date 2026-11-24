@@ -1,3 +1,4 @@
+import uuid
 from datetime import timedelta
 from decimal import Decimal
 
@@ -188,21 +189,21 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertIn(self.category_a.id, cat_ids)
         self.assertNotIn(self.category_b.id, cat_ids)
 
-        # 2. Retrieve: GET /{id}/ on Shop B category must return 404
-        res = self.client.get(f"/api/inventory/categories/{self.category_b.id}/")
+        # 2. Retrieve: GET /{public_id}/ on Shop B category must return 404
+        res = self.client.get(f"/api/inventory/categories/{self.category_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
-        # 3. Update: PATCH /{id}/ must return 404 and leave Category B unmodified
+        # 3. Update: PATCH /{public_id}/ must return 404 and leave Category B unmodified
         res = self.client.patch(
-            f"/api/inventory/categories/{self.category_b.id}/",
+            f"/api/inventory/categories/{self.category_b.public_id}/",
             data={"name": "Hacked Category"}
         )
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.category_b.refresh_from_db()
         self.assertEqual(self.category_b.name, "Beta Snacks")
 
-        # 4. Delete: DELETE /{id}/ must return 404 and keep Category B in database
-        res = self.client.delete(f"/api/inventory/categories/{self.category_b.id}/")
+        # 4. Delete: DELETE /{public_id}/ must return 404 and keep Category B in database
+        res = self.client.delete(f"/api/inventory/categories/{self.category_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(Category.objects.filter(id=self.category_b.id).exists())
 
@@ -218,12 +219,12 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertNotIn(self.product_b.id, prod_ids)
 
         # 2. Retrieve
-        res = self.client.get(f"/api/inventory/products/{self.product_b.id}/")
+        res = self.client.get(f"/api/inventory/products/{self.product_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
         # 3. Update
         res = self.client.patch(
-            f"/api/inventory/products/{self.product_b.id}/",
+            f"/api/inventory/products/{self.product_b.public_id}/",
             data={"selling_price": "1.00"}
         )
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
@@ -231,7 +232,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertEqual(self.product_b.selling_price, Decimal("120.00"))
 
         # 4. Delete
-        res = self.client.delete(f"/api/inventory/products/{self.product_b.id}/")
+        res = self.client.delete(f"/api/inventory/products/{self.product_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(Product.objects.filter(id=self.product_b.id).exists())
 
@@ -247,12 +248,12 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertNotIn(self.customer_b.id, cust_ids)
 
         # 2. Retrieve
-        res = self.client.get(f"/api/sales/customers/{self.customer_b.id}/")
+        res = self.client.get(f"/api/sales/customers/{self.customer_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
         # 3. Update
         res = self.client.patch(
-            f"/api/sales/customers/{self.customer_b.id}/",
+            f"/api/sales/customers/{self.customer_b.public_id}/",
             data={"name": "Hacked Customer"}
         )
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
@@ -260,7 +261,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertEqual(self.customer_b.name, "Bob Beta")
 
         # 4. Delete
-        res = self.client.delete(f"/api/sales/customers/{self.customer_b.id}/")
+        res = self.client.delete(f"/api/sales/customers/{self.customer_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(Customer.objects.filter(id=self.customer_b.id).exists())
 
@@ -276,7 +277,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertNotIn(self.invoice_b.id, inv_ids)
 
         # 2. Retrieve
-        res = self.client.get(f"/api/sales/invoices/{self.invoice_b.id}/")
+        res = self.client.get(f"/api/sales/invoices/{self.invoice_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_owner_a_cannot_access_or_mutate_shop_b_credit_payments(self):
@@ -291,18 +292,18 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertNotIn(self.credit_payment_b.id, payment_ids)
 
         # 2. Retrieve
-        res = self.client.get(f"/api/sales/credit-payments/{self.credit_payment_b.id}/")
+        res = self.client.get(f"/api/sales/credit-payments/{self.credit_payment_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
         # 3. Update
         res = self.client.patch(
-            f"/api/sales/credit-payments/{self.credit_payment_b.id}/",
+            f"/api/sales/credit-payments/{self.credit_payment_b.public_id}/",
             data={"notes": "Tampered note"}
         )
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
         # 4. Delete
-        res = self.client.delete(f"/api/sales/credit-payments/{self.credit_payment_b.id}/")
+        res = self.client.delete(f"/api/sales/credit-payments/{self.credit_payment_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(CreditPayment.objects.filter(id=self.credit_payment_b.id).exists())
 
@@ -318,12 +319,12 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertNotIn(self.pd_cheque_b.id, chq_ids)
 
         # 2. Retrieve
-        res = self.client.get(f"/api/sales/pd-cheques/{self.pd_cheque_b.id}/")
+        res = self.client.get(f"/api/sales/pd-cheques/{self.pd_cheque_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
         # 3. Update
         res = self.client.patch(
-            f"/api/sales/pd-cheques/{self.pd_cheque_b.id}/",
+            f"/api/sales/pd-cheques/{self.pd_cheque_b.public_id}/",
             data={"bank_name": "Tampered Bank"}
         )
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
@@ -331,7 +332,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         self.assertEqual(self.pd_cheque_b.bank_name, "Sampath Bank")
 
         # 4. Delete
-        res = self.client.delete(f"/api/sales/pd-cheques/{self.pd_cheque_b.id}/")
+        res = self.client.delete(f"/api/sales/pd-cheques/{self.pd_cheque_b.public_id}/")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(PDCheque.objects.filter(id=self.pd_cheque_b.id).exists())
 
@@ -513,3 +514,119 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         res = self.client.get("/api/sales/dashboard/")
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn("Active shop membership required.", res.data["detail"])
+
+    # ==========================================================================
+    # 5. UUID PUBLIC_ID LOOKUP & GENERATION TESTS (Phase 1A — Task 2b)
+    # ==========================================================================
+
+    def test_detail_endpoints_resolve_via_uuid_and_reject_integer_ids(self):
+        """
+        Detail endpoints must resolve cleanly when queried with UUID public_id,
+        and must return 404 Not Found when queried with legacy integer IDs.
+        """
+        self.client.force_authenticate(user=self.owner_a)
+
+        # 1. Category: Resolves with public_id, 404s with integer ID
+        res_uuid = self.client.get(f"/api/inventory/categories/{self.category_a.public_id}/")
+        self.assertEqual(res_uuid.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_uuid.data["public_id"], str(self.category_a.public_id))
+
+        res_int = self.client.get(f"/api/inventory/categories/{self.category_a.id}/")
+        self.assertEqual(res_int.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 2. Product: Resolves with public_id, 404s with integer ID
+        res_uuid = self.client.get(f"/api/inventory/products/{self.product_a.public_id}/")
+        self.assertEqual(res_uuid.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_uuid.data["public_id"], str(self.product_a.public_id))
+
+        res_int = self.client.get(f"/api/inventory/products/{self.product_a.id}/")
+        self.assertEqual(res_int.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 3. Customer: Resolves with public_id, 404s with integer ID
+        res_uuid = self.client.get(f"/api/sales/customers/{self.customer_a.public_id}/")
+        self.assertEqual(res_uuid.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_uuid.data["public_id"], str(self.customer_a.public_id))
+
+        res_int = self.client.get(f"/api/sales/customers/{self.customer_a.id}/")
+        self.assertEqual(res_int.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 4. Invoice: Resolves with public_id, 404s with integer ID
+        res_uuid = self.client.get(f"/api/sales/invoices/{self.invoice_a.public_id}/")
+        self.assertEqual(res_uuid.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_uuid.data["public_id"], str(self.invoice_a.public_id))
+
+        res_int = self.client.get(f"/api/sales/invoices/{self.invoice_a.id}/")
+        self.assertEqual(res_int.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 5. CreditPayment: Resolves with public_id, 404s with integer ID
+        res_uuid = self.client.get(f"/api/sales/credit-payments/{self.credit_payment_a.public_id}/")
+        self.assertEqual(res_uuid.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_uuid.data["public_id"], str(self.credit_payment_a.public_id))
+
+        res_int = self.client.get(f"/api/sales/credit-payments/{self.credit_payment_a.id}/")
+        self.assertEqual(res_int.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 6. PDCheque: Resolves with public_id, 404s with integer ID
+        res_uuid = self.client.get(f"/api/sales/pd-cheques/{self.pd_cheque_a.public_id}/")
+        self.assertEqual(res_uuid.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_uuid.data["public_id"], str(self.pd_cheque_a.public_id))
+
+        res_int = self.client.get(f"/api/sales/pd-cheques/{self.pd_cheque_a.id}/")
+        self.assertEqual(res_int.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_newly_created_records_automatically_assigned_unique_uuid4_public_ids(self):
+        """
+        Every newly created model instance must automatically receive an immutable,
+        unique UUID4 public_id, exposed in the serializer response.
+        """
+        self.client.force_authenticate(user=self.owner_a)
+
+        # 1. Shop public_id check
+        self.assertIsInstance(self.shop_a.public_id, uuid.UUID)
+        self.assertIsInstance(self.shop_b.public_id, uuid.UUID)
+        self.assertNotEqual(self.shop_a.public_id, self.shop_b.public_id)
+
+        # 2. Create Category via API
+        cat_res = self.client.post(
+            "/api/inventory/categories/",
+            data={"name": "New Fresh Produce"},
+            format="json"
+        )
+        self.assertEqual(cat_res.status_code, status.HTTP_201_CREATED)
+        self.assertIn("public_id", cat_res.data)
+        cat_uuid = uuid.UUID(cat_res.data["public_id"])
+        self.assertEqual(cat_uuid.version, 4)
+
+        # 3. Create Product via API
+        prod_res = self.client.post(
+            "/api/inventory/products/",
+            data={
+                "name": "Fresh Organic Apples",
+                "category": self.category_a.id,
+                "barcode": "999888777",
+                "cost_price": "150.00",
+                "selling_price": "220.00",
+                "stock_quantity": 40
+            },
+            format="json"
+        )
+        self.assertEqual(prod_res.status_code, status.HTTP_201_CREATED)
+        self.assertIn("public_id", prod_res.data)
+        prod_uuid = uuid.UUID(prod_res.data["public_id"])
+        self.assertEqual(prod_uuid.version, 4)
+        self.assertNotEqual(cat_uuid, prod_uuid)
+
+        # 4. Create Customer via API
+        cust_res = self.client.post(
+            "/api/sales/customers/",
+            data={
+                "name": "Charlie Customer",
+                "phone": "0733333333"
+            },
+            format="json"
+        )
+        self.assertEqual(cust_res.status_code, status.HTTP_201_CREATED)
+        self.assertIn("public_id", cust_res.data)
+        cust_uuid = uuid.UUID(cust_res.data["public_id"])
+        self.assertEqual(cust_uuid.version, 4)
+        self.assertNotEqual(prod_uuid, cust_uuid)

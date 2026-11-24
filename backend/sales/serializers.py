@@ -19,6 +19,7 @@ class CustomerSerializer(serializers.ModelSerializer):
         model = Customer
         fields = (
             'id',
+            'public_id',
             'name',
             'phone',
             'address',
@@ -29,7 +30,7 @@ class CustomerSerializer(serializers.ModelSerializer):
         # WHY total_credit_balance is read_only:
         # A user must NEVER directly overwrite a customer's credit balance via PUT/PATCH!
         # Balance must ONLY change via authenticated sales (invoices) or audited credit settlements.
-        read_only_fields = ('id', 'total_credit_balance', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'public_id', 'total_credit_balance', 'created_at', 'updated_at')
 
 
 class InvoiceItemSerializer(serializers.ModelSerializer):
@@ -275,6 +276,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         model = Invoice
         fields = (
             'id',
+            'public_id',
             'invoice_number',
             'customer',
             'customer_name',
@@ -353,6 +355,7 @@ class CreditPaymentSerializer(serializers.ModelSerializer):
         model = CreditPayment
         fields = (
             'id',
+            'public_id',
             'customer',
             'customer_name',
             'amount_paid',
@@ -362,7 +365,7 @@ class CreditPaymentSerializer(serializers.ModelSerializer):
             'received_by_name',
             'created_at',
         )
-        read_only_fields = ('id', 'customer_name', 'received_by', 'received_by_name', 'created_at')
+        read_only_fields = ('id', 'public_id', 'customer_name', 'received_by', 'received_by_name', 'created_at')
 
     def validate_customer(self, value):
         request = self.context.get('request')
@@ -413,6 +416,7 @@ class PDChequeSerializer(serializers.ModelSerializer):
         model = PDCheque
         fields = (
             'id',
+            'public_id',
             'customer',
             'customer_name',
             'cheque_number',
@@ -425,7 +429,7 @@ class PDChequeSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         )
-        read_only_fields = ('id', 'customer_name', 'status_display', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'public_id', 'customer_name', 'status_display', 'created_at', 'updated_at')
 
     def validate_customer(self, value):
         if value is None:

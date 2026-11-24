@@ -1,3 +1,5 @@
+import uuid
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
@@ -11,6 +13,13 @@ class Shop(models.Model):
     of data isolation. Every transaction, product, customer, and staff member
     belongs to a specific Shop.
     """
+    public_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        db_index=True,
+        editable=False,
+        help_text="Public-facing immutable UUID for API exposure and secure references."
+    )
     name = models.CharField(
         max_length=255,
         help_text="The trading name or business name of the shop."
@@ -127,6 +136,13 @@ class ShopAwareModel(models.Model):
     This guarantees that every record in the database is automatically stamped with a
     'shop' foreign key and timestamp fields, adhering to our DRY architecture.
     """
+    public_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        db_index=True,
+        editable=False,
+        help_text="Public-facing immutable UUID for API exposure and secure references."
+    )
     shop = models.ForeignKey(
         Shop,
         on_delete=models.CASCADE,

@@ -20,7 +20,14 @@ class ShopScopedViewSetMixin:
     3. Creation Scoping:
        Automatically binds `shop=request.user.shop` in `perform_create()`, preventing
        clients from tampering with tenant ownership headers or body payloads.
+    4. UUID Public ID Lookups:
+       Sets `lookup_field = 'public_id'` and `lookup_url_kwarg = 'public_id'` so
+       detail routes (/items/{public_id}/) resolve by non-sequential UUIDs instead of
+       sequential integer PKs, preventing ID enumeration attacks.
     """
+
+    lookup_field = "public_id"
+    lookup_url_kwarg = "public_id"
 
     def get_queryset(self):
         """
