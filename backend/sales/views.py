@@ -7,9 +7,11 @@ from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.mixins import ShopScopedViewSetMixin
 from inventory.models import Product
 
 from .models import CreditPayment, Customer, Invoice, InvoiceItem, PDCheque
@@ -23,20 +25,17 @@ from .serializers import (
 )
 
 
-class CustomerViewSet(viewsets.ModelViewSet):
+class CustomerViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing customers and their credit accounts.
-    Guarded by the 'enable_credit_module' feature flag.
+    Guarded by 'enable_credit_module' and scoped to active shop tenant.
     """
+    queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
     permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
 
     def get_queryset(self):
-        user = self.request.user
-        if not user or not user.is_authenticated or not user.shop:
-            return Customer.objects.none()
-
-        queryset = Customer.objects.filter(shop=user.shop)
+        queryset = super().get_queryset()
 
         # Optional search by customer name or phone number
         search = self.request.query_params.get('search', '').strip()
@@ -52,27 +51,22 @@ class CustomerViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    def perform_create(self, serializer):
-        serializer.save(shop=self.request.user.shop)
 
-
-class InvoiceViewSet(viewsets.ModelViewSet):
+class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for POS Invoices and Sales Transactions.
     Supports atomic checkout on POST, and full itemized retrieval on GET.
+    Scoped to active shop tenant via ShopScopedViewSetMixin.
     """
+    queryset = (
+        Invoice.objects.all()
+        .select_related('customer', 'cashier')
+        .prefetch_related('items__product')
+    )
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
-        if not user or not user.is_authenticated or not user.shop:
-            return Invoice.objects.none()
-
-        queryset = (
-            Invoice.objects.filter(shop=user.shop)
-            .select_related('customer', 'cashier')
-            .prefetch_related('items__product')
-        )
+        queryset = super().get_queryset()
 
         # Filter by customer
         customer_id = self.request.query_params.get('customer')
@@ -104,6 +98,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         """
         Custom create to execute atomic checkout and return the rich InvoiceSerializer response.
         """
+        user = getattr(request, 'user', None)
+        shop = getattr(user, 'shop', None)
+        if not shop or not shop.is_active:
+            raise PermissionDenied("Active shop membership required.")
+
         checkout_serializer = InvoiceCheckoutSerializer(
             data=request.data,
             context={'request': request}
@@ -116,20 +115,17 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
-class CreditPaymentViewSet(viewsets.ModelViewSet):
+class CreditPaymentViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for settling customer credit accounts.
-    Guarded by 'enable_credit_module'.
+    Guarded by 'enable_credit_module' and scoped to active shop tenant.
     """
+    queryset = CreditPayment.objects.all().select_related('customer', 'received_by')
     serializer_class = CreditPaymentSerializer
     permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
 
     def get_queryset(self):
-        user = self.request.user
-        if not user or not user.is_authenticated or not user.shop:
-            return CreditPayment.objects.none()
-
-        queryset = CreditPayment.objects.filter(shop=user.shop).select_related('customer', 'received_by')
+        queryset = super().get_queryset()
 
         customer_id = self.request.query_params.get('customer')
         if customer_id:
@@ -137,24 +133,18 @@ class CreditPaymentViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    def perform_create(self, serializer):
-        serializer.save()
 
-
-class PDChequeViewSet(viewsets.ModelViewSet):
+class PDChequeViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing Post-Dated Cheques.
-    Guarded by 'enable_credit_module'.
+    Guarded by 'enable_credit_module' and scoped to active shop tenant.
     """
+    queryset = PDCheque.objects.all().select_related('customer')
     serializer_class = PDChequeSerializer
     permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
 
     def get_queryset(self):
-        user = self.request.user
-        if not user or not user.is_authenticated or not user.shop:
-            return PDCheque.objects.none()
-
-        queryset = PDCheque.objects.filter(shop=user.shop).select_related('customer')
+        queryset = super().get_queryset()
 
         # Filter by status (e.g. ?status=PENDING)
         status_param = self.request.query_params.get('status')
@@ -162,9 +152,6 @@ class PDChequeViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(status=status_param.upper())
 
         return queryset
-
-    def perform_create(self, serializer):
-        serializer.save(shop=self.request.user.shop)
 
     @action(detail=False, methods=['get'], url_path='upcoming')
     def upcoming(self, request):
@@ -174,6 +161,7 @@ class PDChequeViewSet(viewsets.ModelViewSet):
 
         WHY:
         Helps store owners plan cash flow by anticipating bank deposits for the upcoming week.
+        Scoped strictly through self.get_queryset() to prevent cross-tenant leakage.
         """
         today = timezone.now().date()
         next_week = today + timedelta(days=7)
@@ -200,7 +188,7 @@ class DashboardAnalyticsView(APIView):
     WHY:
     Provides shop owners with real-time financial KPIs (revenue, profit, cash, credit,
     inventory alerts, and top products) calculated directly within PostgreSQL via Django ORM.
-    Cashiers are strictly forbidden from viewing this endpoint (403 Forbidden).
+    Cashiers and users without an active shop subscription are strictly forbidden (403).
     """
     permission_classes = [permissions.IsAuthenticated, IsShopOwner]
 
@@ -220,7 +208,11 @@ class DashboardAnalyticsView(APIView):
         ]
     )
     def get(self, request, *args, **kwargs):
-        shop = request.user.shop
+        user = getattr(request, 'user', None)
+        shop = getattr(user, 'shop', None)
+        if not shop or not shop.is_active:
+            raise PermissionDenied("Active shop membership required.")
+
         today = timezone.now().date()
 
         # Parse 'days' parameter (defaults to 1 for today's metrics)

@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
+from core.mixins import validate_tenant_fk
 from inventory.models import Product
 
 from .models import CreditPayment, Customer, Invoice, InvoiceItem, PDCheque
@@ -121,14 +122,9 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
         WHY: Prevent Cross-Tenant IDOR attacks (ARCHITECTURE.md Rule B).
         Customer must belong to the active shop.
         """
-        if value is None:
-            return value
-
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and request.user.shop:
-            if value.shop != request.user.shop:
-                raise serializers.ValidationError("Customer does not belong to your shop.")
-        return value
+        shop = getattr(getattr(request, 'user', None), 'shop', None)
+        return validate_tenant_fk(value, shop, field_name="customer")
 
     def create(self, validated_data):
         request = self.context['request']
@@ -143,6 +139,7 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
         items_data = validated_data.get('items', [])
 
         product_ids = [item['product_id'] for item in items_data]
+        unique_product_ids = set(product_ids)
         qty_map = {item['product_id']: item['quantity'] for item in items_data}
 
         # ----------------------------------------------------------------------
@@ -156,15 +153,13 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
             # rows until this checkout commits, preventing overselling / race conditions.
             products = list(
                 Product.objects.select_for_update()
-                .filter(id__in=product_ids, shop=shop)
+                .filter(id__in=unique_product_ids, shop=shop)
             )
 
             # Validate that all requested products were found in this tenant
-            if len(products) != len(product_ids):
-                found_ids = {p.id for p in products}
-                missing_ids = set(product_ids) - found_ids
+            if len(products) != len(unique_product_ids):
                 raise serializers.ValidationError(
-                    f"Products with IDs {list(missing_ids)} do not exist in your shop."
+                    {"items": "One or more products are invalid or unavailable."}
                 )
 
             # Check stock and calculate subtotal
@@ -371,10 +366,8 @@ class CreditPaymentSerializer(serializers.ModelSerializer):
 
     def validate_customer(self, value):
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and request.user.shop:
-            if value.shop != request.user.shop:
-                raise serializers.ValidationError("Customer does not belong to your shop.")
-        return value
+        shop = getattr(getattr(request, 'user', None), 'shop', None)
+        return validate_tenant_fk(value, shop, field_name="customer")
 
     def validate_amount_paid(self, value):
         if value <= Decimal('0.00'):
@@ -383,7 +376,7 @@ class CreditPaymentSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context['request']
-        shop = request.user.shop
+        shop = validated_data.get('shop') or request.user.shop
         customer = validated_data['customer']
         amount_paid = validated_data['amount_paid']
 
@@ -438,10 +431,8 @@ class PDChequeSerializer(serializers.ModelSerializer):
         if value is None:
             return value
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and request.user.shop:
-            if value.shop != request.user.shop:
-                raise serializers.ValidationError("Customer does not belong to your shop.")
-        return value
+        shop = getattr(getattr(request, 'user', None), 'shop', None)
+        return validate_tenant_fk(value, shop, field_name="customer")
 
     def validate_amount(self, value):
         if value <= Decimal('0.00'):

@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from core.mixins import validate_tenant_fk
+
 from .models import Category, Product
 
 
@@ -105,16 +107,9 @@ class ProductSerializer(serializers.ModelSerializer):
         Prevents IDOR / Foreign Key Spoofing (Rule B from ARCHITECTURE.md).
         A shop owner cannot attach a Category ID that belongs to another shop!
         """
-        if value is None:
-            return value
-
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and request.user.shop:
-            if value.shop != request.user.shop:
-                raise serializers.ValidationError(
-                    "Selected category does not exist in your shop."
-                )
-        return value
+        shop = getattr(getattr(request, 'user', None), 'shop', None)
+        return validate_tenant_fk(value, shop, field_name="category")
 
     def validate_barcode(self, value):
         """
