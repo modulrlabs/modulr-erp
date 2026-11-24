@@ -174,8 +174,8 @@ class AuditLogTriggerTests(APITestCase):
 
         stock_log = AuditLog.objects.filter(action="PRODUCT_STOCK_CHANGED").first()
         self.assertIsNotNone(stock_log)
-        self.assertEqual(stock_log.before_state["stock_quantity"], 50)
-        self.assertEqual(stock_log.after_state["stock_quantity"], 75)
+        self.assertEqual(stock_log.before_state["stock_quantity"], "50.000")
+        self.assertEqual(stock_log.after_state["stock_quantity"], "75.000")
 
     def test_csv_import_trigger(self):
         """Bulk CSV upload must emit CSV_IMPORT audit record with summary metrics."""

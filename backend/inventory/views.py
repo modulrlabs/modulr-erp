@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from core.audit import log_audit_event
 from core.mixins import ShopScopedViewSetMixin
 
-from .models import Category, Product
+from .models import Category, Product, StockMovement
 from .permissions import IsShopOwner, IsShopOwnerOrReadOnly
 from .serializers import (
     CategorySerializer,
@@ -74,10 +74,24 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         """
-        Record PRODUCT_CREATED audit event upon creation.
+        Record PRODUCT_CREATED audit event and INITIAL_STOCK ledger entry upon creation.
         """
         super().perform_create(serializer)
         product = serializer.instance
+
+        if product.stock_quantity > Decimal('0.000'):
+            StockMovement.objects.create(
+                shop=product.shop,
+                product=product,
+                movement_type=StockMovement.MovementType.INITIAL_STOCK,
+                quantity_change=product.stock_quantity,
+                balance_after=product.stock_quantity,
+                reference_type='Product',
+                reference_id=str(product.public_id),
+                notes="Initial stock on product creation",
+                performed_by=self.request.user,
+            )
+
         log_audit_event(
             action='PRODUCT_CREATED',
             target_model='Product',
@@ -95,7 +109,8 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """
-        Record PRODUCT_PRICE_CHANGED and PRODUCT_STOCK_CHANGED audit events.
+        Record PRODUCT_PRICE_CHANGED and PRODUCT_STOCK_CHANGED audit events,
+        and log ADJUSTMENT in StockMovement if stock was modified.
         """
         instance = self.get_object()
         old_cost = instance.cost_price
@@ -117,6 +132,18 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
             )
 
         if old_stock != product.stock_quantity:
+            delta = product.stock_quantity - old_stock
+            StockMovement.objects.create(
+                shop=product.shop,
+                product=product,
+                movement_type=StockMovement.MovementType.ADJUSTMENT,
+                quantity_change=delta,
+                balance_after=product.stock_quantity,
+                reference_type='Product',
+                reference_id=str(product.public_id),
+                notes="Manual inventory adjustment",
+                performed_by=self.request.user,
+            )
             log_audit_event(
                 action='PRODUCT_STOCK_CHANGED',
                 target_model='Product',
@@ -223,8 +250,8 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
                 try:
                     selling_price = Decimal(row_cleaned.get('selling_price', '0.00'))
                     cost_price = Decimal(row_cleaned.get('cost_price', '0.00'))
-                    stock_quantity = int(row_cleaned.get('stock_quantity', '0'))
-                    reorder_level = int(row_cleaned.get('reorder_level', '5'))
+                    stock_quantity = Decimal(row_cleaned.get('stock_quantity', '0.000'))
+                    reorder_level = Decimal(row_cleaned.get('reorder_level', '5.000'))
                 except (InvalidOperation, ValueError):
                     errors.append(f"Row {row_idx} ({name}): Invalid numerical format in price or quantity.")
                     continue
@@ -243,6 +270,7 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
                     product = Product.objects.filter(shop=shop, barcode=barcode).first()
 
                 if product:
+                    old_stock = product.stock_quantity
                     # Update existing product
                     product.name = name
                     product.category = category_instance
@@ -251,10 +279,23 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
                     product.stock_quantity = stock_quantity
                     product.reorder_level = reorder_level
                     product.save()
+
+                    if old_stock != stock_quantity:
+                        StockMovement.objects.create(
+                            shop=shop,
+                            product=product,
+                            movement_type=StockMovement.MovementType.CSV_IMPORT,
+                            quantity_change=stock_quantity - old_stock,
+                            balance_after=stock_quantity,
+                            reference_type='Product',
+                            reference_id=str(product.public_id),
+                            notes="Stock updated via CSV import",
+                            performed_by=request.user,
+                        )
                     updated_count += 1
                 else:
                     # Create new product
-                    Product.objects.create(
+                    new_product = Product.objects.create(
                         shop=shop,
                         category=category_instance,
                         name=name,
@@ -264,6 +305,18 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
                         stock_quantity=stock_quantity,
                         reorder_level=reorder_level,
                     )
+                    if new_product.stock_quantity > Decimal('0.000'):
+                        StockMovement.objects.create(
+                            shop=shop,
+                            product=new_product,
+                            movement_type=StockMovement.MovementType.CSV_IMPORT,
+                            quantity_change=new_product.stock_quantity,
+                            balance_after=new_product.stock_quantity,
+                            reference_type='Product',
+                            reference_id=str(new_product.public_id),
+                            notes="Initial stock from CSV import",
+                            performed_by=request.user,
+                        )
                     created_count += 1
 
         log_audit_event(

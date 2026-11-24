@@ -7,9 +7,17 @@ from rest_framework import serializers
 
 from core.audit import log_audit_event
 from core.mixins import validate_tenant_fk
-from inventory.models import Product
+from inventory.models import Product, StockMovement
 
-from .models import CreditPayment, Customer, Invoice, InvoiceItem, PDCheque
+from .models import (
+    CreditPayment,
+    Customer,
+    Invoice,
+    InvoiceItem,
+    PDCheque,
+    SalesReturn,
+    SalesReturnItem,
+)
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -67,9 +75,15 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 class InvoiceItemInputSerializer(serializers.Serializer):
     """
     Input serializer for each item being rung up at checkout.
+    Supports fractional quantities (e.g., 1.250 kg).
     """
     product_id = serializers.IntegerField(required=True)
-    quantity = serializers.IntegerField(required=True, min_value=1)
+    quantity = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+        required=True,
+        min_value=Decimal('0.001')
+    )
 
 
 class InvoiceCheckoutSerializer(serializers.Serializer):
@@ -77,12 +91,13 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
     Handles Atomic POS Checkout: POST /api/sales/invoices/
 
     WHY:
-    A POS sale involves 4 distinct, interdependent database actions:
+    A POS sale involves 5 distinct, interdependent database actions:
     1. Stock check & deduction with select_for_update() row locks.
     2. Generating the invoice header with auto-sequenced numbering.
     3. Creating line items with cost-price snapshots.
-    4. Updating customer debt ledger if payment is credit / pay-later.
-    All 4 MUST execute inside transaction.atomic() to guarantee financial integrity.
+    4. Recording immutable StockMovement ledger entries.
+    5. Updating customer debt ledger if payment is credit / pay-later.
+    All 5 MUST execute inside transaction.atomic() to guarantee financial integrity.
     """
     customer = serializers.PrimaryKeyRelatedField(
         queryset=Customer.objects.all(),
@@ -138,6 +153,7 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
         discount = validated_data.get('discount', Decimal('0.00'))
         amount_paid = validated_data.get('amount_paid', Decimal('0.00'))
         notes = validated_data.get('notes', '')
+        idempotency_key = validated_data.get('idempotency_key')
         items_data = validated_data.get('items', [])
 
         product_ids = [item['product_id'] for item in items_data]
@@ -181,7 +197,7 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
                 product.stock_quantity -= quantity
                 product.save(update_fields=['stock_quantity', 'updated_at'])
 
-                line_total = product.selling_price * quantity
+                line_total = (product.selling_price * quantity).quantize(Decimal('0.01'))
                 subtotal += line_total
 
                 line_items_to_create.append({
@@ -246,9 +262,10 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
                 amount_paid=amount_paid,
                 credit_amount=credit_amount,
                 notes=notes,
+                idempotency_key=idempotency_key,
             )
 
-            # Create Invoice Line Items
+            # Create Invoice Line Items and StockMovement ledger records
             for item_data in line_items_to_create:
                 InvoiceItem.objects.create(
                     shop=shop,
@@ -258,6 +275,17 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
                     unit_price=item_data['unit_price'],
                     cost_price_at_sale=item_data['cost_price_at_sale'],
                     line_total=item_data['line_total'],
+                )
+                StockMovement.objects.create(
+                    shop=shop,
+                    product=item_data['product'],
+                    movement_type=StockMovement.MovementType.SALE,
+                    quantity_change=-item_data['quantity'],
+                    balance_after=item_data['product'].stock_quantity,
+                    reference_type='Invoice',
+                    reference_id=str(invoice.public_id),
+                    notes=f"Sold on invoice {invoice.invoice_number}",
+                    performed_by=cashier,
                 )
 
             # Record audit event for invoice creation
@@ -296,14 +324,72 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
             return invoice
 
 
+class SalesReturnItemSerializer(serializers.ModelSerializer):
+    """
+    Serializer for line items in a SalesReturn transaction.
+    """
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta:
+        model = SalesReturnItem
+        fields = (
+            'id',
+            'public_id',
+            'product',
+            'product_name',
+            'invoice_item',
+            'quantity',
+            'unit_price',
+            'cost_price_at_sale',
+            'line_total',
+        )
+        read_only_fields = fields
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and not getattr(request.user, 'is_owner', False):
+            self.fields.pop('cost_price_at_sale', None)
+
+
+class SalesReturnSerializer(serializers.ModelSerializer):
+    """
+    Serializer for SalesReturn / Credit Note records.
+    """
+    items = SalesReturnItemSerializer(many=True, read_only=True)
+    processed_by_name = serializers.CharField(source='processed_by.username', read_only=True)
+    invoice_number = serializers.CharField(source='invoice.invoice_number', read_only=True)
+
+    class Meta:
+        model = SalesReturn
+        fields = (
+            'id',
+            'public_id',
+            'return_number',
+            'invoice',
+            'invoice_number',
+            'reason',
+            'total_refund_amount',
+            'credit_reversed',
+            'cash_refunded',
+            'processed_by',
+            'processed_by_name',
+            'items',
+            'created_at',
+        )
+        read_only_fields = fields
+
+
 class InvoiceSerializer(serializers.ModelSerializer):
     """
     Detailed read serializer for Invoices, including line items and WhatsApp receipt share link.
     """
     items = InvoiceItemSerializer(many=True, read_only=True)
+    returns = SalesReturnSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(source='customer.name', read_only=True, default="Walk-in Customer")
     customer_phone = serializers.CharField(source='customer.phone', read_only=True, default="")
     cashier_name = serializers.CharField(source='cashier.username', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
     whatsapp_share_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -312,6 +398,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'id',
             'public_id',
             'invoice_number',
+            'status',
+            'status_display',
             'customer',
             'customer_name',
             'customer_phone',
@@ -324,7 +412,12 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'amount_paid',
             'credit_amount',
             'notes',
+            'void_reason',
+            'voided_at',
+            'voided_by',
+            'idempotency_key',
             'items',
+            'returns',
             'whatsapp_share_url',
             'created_at',
             'updated_at',
@@ -349,6 +442,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         lines = [
             f"🧾 *{obj.shop.name} - RECEIPT*",
             f"Invoice: {obj.invoice_number}",
+            f"Status: {obj.get_status_display()}",
             f"Date: {obj.created_at.strftime('%Y-%m-%d %H:%M')}",
             "----------------------------",
         ]
@@ -375,6 +469,59 @@ class InvoiceSerializer(serializers.ModelSerializer):
         if cleaned_phone:
             return f"https://wa.me/{cleaned_phone}?text={encoded_message}"
         return f"https://wa.me/?text={encoded_message}"
+
+
+class InvoiceVoidSerializer(serializers.Serializer):
+    """
+    Input serializer for voiding an invoice.
+    """
+    reason = serializers.CharField(
+        required=True,
+        min_length=3,
+        help_text="Reason for voiding the invoice."
+    )
+
+
+class SalesReturnItemInputSerializer(serializers.Serializer):
+    """
+    Input serializer for individual line items being returned.
+    """
+    invoice_item_id = serializers.IntegerField(
+        required=False,
+        help_text="Primary key (or public_id) of the InvoiceItem."
+    )
+    product_id = serializers.IntegerField(
+        required=False,
+        help_text="Product primary key if invoice_item_id is not supplied."
+    )
+    quantity = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+        required=True,
+        min_value=Decimal('0.001'),
+        help_text="Quantity being returned."
+    )
+
+    def validate(self, attrs):
+        if not attrs.get('invoice_item_id') and not attrs.get('product_id'):
+            raise serializers.ValidationError("Either 'invoice_item_id' or 'product_id' is required.")
+        return attrs
+
+
+class SalesReturnCreateSerializer(serializers.Serializer):
+    """
+    Input serializer for processing a merchandise return / credit note.
+    """
+    reason = serializers.CharField(
+        required=True,
+        min_length=3,
+        help_text="Reason for return."
+    )
+    items = SalesReturnItemInputSerializer(
+        many=True,
+        allow_empty=False,
+        help_text="List of items and quantities being returned."
+    )
 
 
 class CreditPaymentSerializer(serializers.ModelSerializer):

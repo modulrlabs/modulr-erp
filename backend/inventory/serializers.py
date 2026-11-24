@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from core.mixins import validate_tenant_fk
@@ -144,14 +146,24 @@ class ProductSerializer(serializers.ModelSerializer):
         WHY: Business Logic Validations:
         - selling_price cannot be negative.
         - cost_price cannot be negative.
+        - stock_quantity cannot be negative.
+        - reorder_level cannot be negative.
         """
         selling_price = attrs.get('selling_price')
-        if selling_price is not None and selling_price < 0:
+        if selling_price is not None and selling_price < Decimal('0.00'):
             raise serializers.ValidationError({"selling_price": "Selling price cannot be negative."})
 
         cost_price = attrs.get('cost_price')
-        if cost_price is not None and cost_price < 0:
+        if cost_price is not None and cost_price < Decimal('0.00'):
             raise serializers.ValidationError({"cost_price": "Cost price cannot be negative."})
+
+        stock_quantity = attrs.get('stock_quantity')
+        if stock_quantity is not None and stock_quantity < Decimal('0.000'):
+            raise serializers.ValidationError({"stock_quantity": "Stock quantity cannot be negative."})
+
+        reorder_level = attrs.get('reorder_level')
+        if reorder_level is not None and reorder_level < Decimal('0.000'):
+            raise serializers.ValidationError({"reorder_level": "Reorder level cannot be negative."})
 
         return attrs
 
