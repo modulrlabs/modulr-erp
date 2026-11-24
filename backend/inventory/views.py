@@ -10,6 +10,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
+from core.audit import log_audit_event
 from core.mixins import ShopScopedViewSetMixin
 
 from .models import Category, Product
@@ -70,6 +71,61 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
             queryset = queryset.filter(stock_quantity__lte=F('reorder_level'))
 
         return queryset
+
+    def perform_create(self, serializer):
+        """
+        Record PRODUCT_CREATED audit event upon creation.
+        """
+        super().perform_create(serializer)
+        product = serializer.instance
+        log_audit_event(
+            action='PRODUCT_CREATED',
+            target_model='Product',
+            target_id=str(product.public_id),
+            shop=product.shop,
+            actor=self.request.user,
+            after_state={
+                'name': product.name,
+                'barcode': product.barcode,
+                'cost_price': product.cost_price,
+                'selling_price': product.selling_price,
+                'stock_quantity': product.stock_quantity,
+            }
+        )
+
+    def perform_update(self, serializer):
+        """
+        Record PRODUCT_PRICE_CHANGED and PRODUCT_STOCK_CHANGED audit events.
+        """
+        instance = self.get_object()
+        old_cost = instance.cost_price
+        old_selling = instance.selling_price
+        old_stock = instance.stock_quantity
+
+        super().perform_update(serializer)
+        product = serializer.instance
+
+        if old_cost != product.cost_price or old_selling != product.selling_price:
+            log_audit_event(
+                action='PRODUCT_PRICE_CHANGED',
+                target_model='Product',
+                target_id=str(product.public_id),
+                shop=product.shop,
+                actor=self.request.user,
+                before_state={'cost_price': old_cost, 'selling_price': old_selling},
+                after_state={'cost_price': product.cost_price, 'selling_price': product.selling_price},
+            )
+
+        if old_stock != product.stock_quantity:
+            log_audit_event(
+                action='PRODUCT_STOCK_CHANGED',
+                target_model='Product',
+                target_id=str(product.public_id),
+                shop=product.shop,
+                actor=self.request.user,
+                before_state={'stock_quantity': old_stock},
+                after_state={'stock_quantity': product.stock_quantity},
+            )
 
     @action(detail=False, methods=['get'], url_path='by-barcode')
     def by_barcode(self, request):
@@ -209,6 +265,18 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
                         reorder_level=reorder_level,
                     )
                     created_count += 1
+
+        log_audit_event(
+            action='CSV_IMPORT',
+            target_model='Product',
+            shop=shop,
+            actor=request.user,
+            after_state={
+                'created_count': created_count,
+                'updated_count': updated_count,
+                'error_count': len(errors),
+            }
+        )
 
         return Response({
             "message": "CSV inventory processing completed.",

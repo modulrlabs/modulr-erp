@@ -1,15 +1,20 @@
 from django.conf import settings
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema
-from rest_framework import permissions, status
+from rest_framework import permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from .audit import log_audit_event
 from .authentication import clear_refresh_cookie, enforce_cookie_csrf, set_refresh_cookie
-from .models import User
+from .mixins import ShopScopedViewSetMixin
+from .models import AuditLog, User
+from .permissions import IsShopOwner
 from .serializers import (
+    AuditLogSerializer,
     CustomTokenObtainPairSerializer,
     ShopRegisterSerializer,
     ShopSerializer,
@@ -88,6 +93,20 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 set_refresh_cookie(response, refresh_token)
                 if not getattr(settings, 'AUTH_REFRESH_IN_BODY', False):
                     response.data.pop('refresh', None)
+
+            # Record audit event for successful login
+            username = request.data.get('username')
+            user = User.objects.filter(username=username).first()
+            if user:
+                log_audit_event(
+                    action='LOGIN_SUCCESS',
+                    target_model='User',
+                    target_id=str(getattr(user, 'public_id', user.pk)),
+                    shop=user.shop,
+                    actor=user,
+                    actor_username=user.username,
+                    after_state={'username': user.username, 'role': user.role},
+                )
         return response
 
 
@@ -199,15 +218,65 @@ class LogoutView(APIView):
         if not raw_refresh and getattr(settings, 'AUTH_REFRESH_IN_BODY', False):
             raw_refresh = request.data.get('refresh')
 
+        user = None
         if raw_refresh:
             try:
-                RefreshToken(raw_refresh).blacklist()
+                token = RefreshToken(raw_refresh)
+                user_id = token.get('user_id')
+                user = User.objects.filter(id=user_id).first()
+                token.blacklist()
             except (TokenError, InvalidToken):
                 pass  # Ignore if token was already blacklisted or invalid
+
+        if not user and request.user and request.user.is_authenticated:
+            user = request.user
+
+        log_audit_event(
+            action='LOGOUT',
+            target_model='User',
+            target_id=str(getattr(user, 'public_id', user.pk)) if user else '',
+            shop=getattr(user, 'shop', None),
+            actor=user,
+            actor_username=getattr(user, 'username', ''),
+            after_state={'status': 'LOGGED_OUT'},
+        )
 
         response = Response({"message": "Successfully logged out."}, status=status.HTTP_200_OK)
         clear_refresh_cookie(response)
         return response
+
+
+class AuditLogViewSet(ShopScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
+    """
+    Owner-only ViewSet for reviewing tenant audit trails.
+    - Read (GET): Restricted exclusively to Shop Owners (Cashiers receive 403 Forbidden).
+    - Writes (POST, PUT, PATCH, DELETE): Blocked at router/viewset level (ReadOnlyModelViewSet).
+    - Scoping: Automatically scoped to request.user.shop via ShopScopedViewSetMixin.
+    """
+    queryset = AuditLog.objects.all().select_related('actor', 'shop')
+    serializer_class = AuditLogSerializer
+    permission_classes = [permissions.IsAuthenticated, IsShopOwner]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        action_param = self.request.query_params.get('action')
+        if action_param:
+            queryset = queryset.filter(action=action_param.strip().upper())
+
+        target_model = self.request.query_params.get('target_model')
+        if target_model:
+            queryset = queryset.filter(target_model__iexact=target_model.strip())
+
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            queryset = queryset.filter(
+                Q(actor_username__icontains=search) |
+                Q(target_id__icontains=search) |
+                Q(action__icontains=search)
+            )
+
+        return queryset
 
 
 class CurrentUserView(APIView):

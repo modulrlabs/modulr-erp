@@ -1,7 +1,36 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import Shop, User
+from .models import AuditLog, Shop, User
+
+
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    """
+    Read-only Django Admin configuration for immutable AuditLog entries.
+    """
+    list_display = (
+        'created_at',
+        'shop',
+        'actor_username',
+        'action',
+        'target_model',
+        'target_id',
+        'ip_address',
+    )
+    list_filter = ('action', 'target_model', 'shop', 'created_at')
+    search_fields = ('actor_username', 'target_id', 'action')
+    ordering = ('-created_at',)
+    readonly_fields = [f.name for f in AuditLog._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Shop)

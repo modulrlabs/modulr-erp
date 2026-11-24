@@ -3,7 +3,29 @@ from django.db import transaction
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import Shop, User
+from .models import AuditLog, Shop, User
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    """
+    Read-only serializer for Immutable AuditLog records.
+    """
+    class Meta:
+        model = AuditLog
+        fields = (
+            'id',
+            'public_id',
+            'actor_username',
+            'action',
+            'target_model',
+            'target_id',
+            'before_state',
+            'after_state',
+            'ip_address',
+            'user_agent',
+            'created_at',
+        )
+        read_only_fields = fields
 
 
 class ShopSerializer(serializers.ModelSerializer):

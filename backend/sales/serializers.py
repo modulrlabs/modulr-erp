@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
+from core.audit import log_audit_event
 from core.mixins import validate_tenant_fk
 from inventory.models import Product
 
@@ -259,6 +260,39 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
                     line_total=item_data['line_total'],
                 )
 
+            # Record audit event for invoice creation
+            log_audit_event(
+                action='INVOICE_CREATED',
+                target_model='Invoice',
+                target_id=str(invoice.public_id),
+                shop=shop,
+                actor=cashier,
+                after_state={
+                    'invoice_number': invoice.invoice_number,
+                    'total_amount': invoice.total_amount,
+                    'payment_method': invoice.payment_method,
+                    'amount_paid': invoice.amount_paid,
+                    'credit_amount': invoice.credit_amount,
+                    'item_count': len(line_items_to_create),
+                }
+            )
+
+            # Record audit event if discount was applied
+            if discount > Decimal('0.00'):
+                log_audit_event(
+                    action='DISCOUNT_APPLIED',
+                    target_model='Invoice',
+                    target_id=str(invoice.public_id),
+                    shop=shop,
+                    actor=cashier,
+                    after_state={
+                        'invoice_number': invoice.invoice_number,
+                        'subtotal': subtotal,
+                        'discount': discount,
+                        'total_amount': total_amount,
+                    }
+                )
+
             return invoice
 
 
@@ -386,6 +420,7 @@ class CreditPaymentSerializer(serializers.ModelSerializer):
         with transaction.atomic():
             # Lock customer row to prevent concurrent settlement inconsistencies
             customer_locked = Customer.objects.select_for_update().get(id=customer.id, shop=shop)
+            old_balance = customer_locked.total_credit_balance
 
             # Deduct paid amount from credit balance
             customer_locked.total_credit_balance = max(
@@ -402,6 +437,24 @@ class CreditPaymentSerializer(serializers.ModelSerializer):
                 notes=validated_data.get('notes', ''),
                 received_by=request.user,
             )
+
+            log_audit_event(
+                action='CREDIT_PAYMENT_RECORDED',
+                target_model='CreditPayment',
+                target_id=str(payment.public_id),
+                shop=shop,
+                actor=request.user,
+                before_state={
+                    'customer_id': str(customer_locked.public_id),
+                    'total_credit_balance': old_balance,
+                },
+                after_state={
+                    'customer_id': str(customer_locked.public_id),
+                    'amount_paid': amount_paid,
+                    'total_credit_balance': customer_locked.total_credit_balance,
+                }
+            )
+
             return payment
 
 
