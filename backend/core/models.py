@@ -161,3 +161,133 @@ class ShopAwareModel(models.Model):
 
     class Meta:
         abstract = True
+
+
+class AuditLogQuerySet(models.QuerySet):
+    """
+    QuerySet that blocks bulk update and delete operations on AuditLog.
+    """
+    def update(self, *args, **kwargs):
+        raise ValueError("AuditLog entries are immutable and cannot be modified.")
+
+    def delete(self):
+        raise ValueError("AuditLog entries are immutable and cannot be deleted.")
+
+
+class AuditLogManager(models.Manager.from_queryset(AuditLogQuerySet)):
+    """
+    Manager for immutable AuditLog entries.
+    """
+    pass
+
+
+class AuditLog(models.Model):
+    """
+    Immutable audit log capturing critical security, financial, and inventory actions.
+
+    WHY:
+    In a SaaS ERP handling money, inventory adjustments, and multi-tenant user access,
+    an immutable audit trail is an essential regulatory and operational requirement.
+    It guarantees that every action (logins, price changes, discounts, credit payments)
+    can be attributed to an actor, IP, timestamp, and state before/after.
+
+    CRITICAL IMMUTABILITY ENFORCEMENT:
+    - Overridden save() raises ValueError if self.pk is not None (cannot be edited).
+    - Overridden delete() raises ValueError (cannot be deleted).
+    - Custom QuerySet/Manager raises ValueError on bulk .update() and .delete().
+    """
+    public_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        db_index=True,
+        editable=False,
+        help_text="Public-facing immutable UUID for API exposure and secure references."
+    )
+    shop = models.ForeignKey(
+        Shop,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='audit_logs',
+        db_index=True,
+        help_text="The tenant shop where this event occurred (null for platform/pre-auth events)."
+    )
+    actor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audit_logs',
+        help_text="User who initiated this action (null if anonymous/system/unauthenticated)."
+    )
+    actor_username = models.CharField(
+        max_length=150,
+        blank=True,
+        help_text="Snapshot of the username at action time (preserved even if User is deleted)."
+    )
+    action = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="Machine-readable action identifier (e.g., LOGIN_SUCCESS, PRODUCT_PRICE_CHANGED)."
+    )
+    target_model = models.CharField(
+        max_length=100,
+        db_index=True,
+        help_text="Name of the model affected (e.g., Product, Invoice, User)."
+    )
+    target_id = models.CharField(
+        max_length=64,
+        blank=True,
+        db_index=True,
+        help_text="Identifier (public_id or ID) of the target entity affected."
+    )
+    before_state = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="State snapshot before the action was performed."
+    )
+    after_state = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="State snapshot after the action was performed."
+    )
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        help_text="Client IP address that initiated the request."
+    )
+    user_agent = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Client HTTP User-Agent string."
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text="Timestamp when the audit log was recorded."
+    )
+
+    objects = AuditLogManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['shop', '-created_at']),
+        ]
+        verbose_name = 'Audit Log'
+        verbose_name_plural = 'Audit Logs'
+
+    def __str__(self):
+        shop_name = self.shop.name if self.shop else "System/Auth"
+        ts = self.created_at.strftime('%Y-%m-%d %H:%M:%S')
+        actor = self.actor_username or 'System'
+        return f"[{ts}] {shop_name} - {self.action} by {actor}"
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValueError("AuditLog entries are immutable and cannot be modified.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("AuditLog entries are immutable and cannot be deleted.")
+

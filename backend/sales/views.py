@@ -11,6 +11,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import log_audit_event
 from core.mixins import ShopScopedViewSetMixin
 from inventory.models import Product
 
@@ -152,6 +153,25 @@ class PDChequeViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
             queryset = queryset.filter(status=status_param.upper())
 
         return queryset
+
+    def perform_update(self, serializer):
+        """
+        Record PD_CHEQUE_UPDATED audit event when cheque status changes.
+        """
+        instance = self.get_object()
+        old_status = instance.status
+        super().perform_update(serializer)
+        cheque = serializer.instance
+        if old_status != cheque.status:
+            log_audit_event(
+                action='PD_CHEQUE_UPDATED',
+                target_model='PDCheque',
+                target_id=str(cheque.public_id),
+                shop=cheque.shop,
+                actor=self.request.user,
+                before_state={'status': old_status},
+                after_state={'status': cheque.status},
+            )
 
     @action(detail=False, methods=['get'], url_path='upcoming')
     def upcoming(self, request):

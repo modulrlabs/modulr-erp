@@ -23,6 +23,8 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
+from core.urls import router as core_router
+
 
 def api_root_view(request):
     """
@@ -45,6 +47,9 @@ def api_root_view(request):
                 "refresh": "/api/auth/token/refresh/",
                 "logout": "/api/auth/logout/",
                 "me": "/api/auth/me/",
+            },
+            "core": {
+                "audit_logs": "/api/core/audit-logs/",
             },
             "inventory": {
                 "categories": "/api/inventory/categories/",
@@ -71,6 +76,7 @@ urlpatterns = [
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     path('api/auth/', include('core.urls')),
+    path('api/core/', include((core_router.urls, 'core'))),
     path('api/inventory/', include('inventory.urls')),
     path('api/sales/', include('sales.urls')),
 ]

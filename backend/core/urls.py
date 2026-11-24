@@ -1,12 +1,17 @@
 from django.urls import path
+from rest_framework.routers import DefaultRouter
 
 from .views import (
+    AuditLogViewSet,
     CookieTokenRefreshView,
     CurrentUserView,
     CustomTokenObtainPairView,
     LogoutView,
     RegisterView,
 )
+
+router = DefaultRouter()
+router.register(r'audit-logs', AuditLogViewSet, basename='audit-log')
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='auth_register'),
