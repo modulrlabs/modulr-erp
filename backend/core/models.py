@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from django.contrib.auth.models import AbstractUser
 from django.db import models
@@ -72,6 +73,58 @@ class Shop(models.Model):
         return self.name
 
 
+class ShopSettings(models.Model):
+    """
+    Per-shop RBAC delegation toggles and operational guardrails.
+
+    WHY SEPARATE FROM Shop:
+    Keeps Shop focused on tenant identity and SaaS subscription flags while
+    allowing Owners to configure granular delegation rules for Managers and
+    discount caps for Cashiers.
+    """
+    shop = models.OneToOneField(
+        Shop,
+        on_delete=models.CASCADE,
+        related_name='settings',
+        help_text="The tenant shop these RBAC and operational settings apply to."
+    )
+    managers_can_edit_products = models.BooleanField(
+        default=False,
+        help_text="Grants inventory.manage_products to MANAGER users."
+    )
+    managers_can_view_cost_price = models.BooleanField(
+        default=False,
+        help_text="Grants inventory.view_cost_price to MANAGER users."
+    )
+    managers_can_view_profit = models.BooleanField(
+        default=False,
+        help_text="Grants dashboard.view_profit to MANAGER users."
+    )
+    managers_can_manage_purchasing = models.BooleanField(
+        default=False,
+        help_text="Grants purchasing.manage to MANAGER users (Phase 2)."
+    )
+    managers_can_manage_cashiers = models.BooleanField(
+        default=False,
+        help_text="Grants staff.manage_cashiers_only to MANAGER users."
+    )
+    cashier_max_discount_pct = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Maximum invoice discount percentage a CASHIER may apply (0.00-100.00)."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Shop Settings'
+        verbose_name_plural = 'Shop Settings'
+
+    def __str__(self):
+        return f"Settings for {self.shop.name}"
+
+
 class User(AbstractUser):
     """
     Custom user model representing shop staff (Owners, Cashiers) and platform admins.
@@ -84,8 +137,18 @@ class User(AbstractUser):
 
     class Role(models.TextChoices):
         OWNER = 'OWNER', 'Owner'
+        MANAGER = 'MANAGER', 'Manager'
         CASHIER = 'CASHIER', 'Cashier'
+        INVENTORY_MANAGER = 'INVENTORY_MANAGER', 'Inventory Manager'
+        ACCOUNTANT = 'ACCOUNTANT', 'Accountant'
 
+    public_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        db_index=True,
+        editable=False,
+        help_text="Public-facing immutable UUID for API exposure and secure references."
+    )
     shop = models.ForeignKey(
         Shop,
         on_delete=models.CASCADE,
@@ -98,13 +161,17 @@ class User(AbstractUser):
         )
     )
     role = models.CharField(
-        max_length=10,
+        max_length=30,
         choices=Role.choices,
         default=Role.CASHIER,
         help_text=(
             "Defines the user's operational privileges "
-            "(Owner has full store control; Cashier is restricted to POS checkout)."
+            "(Owner has full store control; other roles are governed by RBAC v2)."
         ),
+    )
+    must_change_password = models.BooleanField(
+        default=False,
+        help_text="Forces user to change password on next login (e.g., after owner reset or invite)."
     )
 
     @property
