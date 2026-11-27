@@ -41,7 +41,7 @@ class CategorySerializer(serializers.ModelSerializer):
             return value
 
         shop = request.user.shop
-        queryset = Category.objects.filter(shop=shop, name__iexact=value.strip())
+        queryset = Category.objects.filter(shop=shop, name__iexact=value.strip(), is_deleted=False)
 
         # When updating an existing category, exclude itself from duplicate check
         if self.instance:
@@ -129,7 +129,7 @@ class ProductSerializer(serializers.ModelSerializer):
             return barcode
 
         shop = request.user.shop
-        queryset = Product.objects.filter(shop=shop, barcode=barcode)
+        queryset = Product.objects.filter(shop=shop, barcode=barcode, is_deleted=False)
 
         # Exclude self when updating
         if self.instance:

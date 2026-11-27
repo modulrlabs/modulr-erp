@@ -175,7 +175,7 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
             # rows until this checkout commits, preventing overselling / race conditions.
             products = list(
                 Product.objects.select_for_update()
-                .filter(id__in=unique_product_ids, shop=shop)
+                .filter(id__in=unique_product_ids, shop=shop, is_deleted=False)
             )
 
             # Validate that all requested products were found in this tenant

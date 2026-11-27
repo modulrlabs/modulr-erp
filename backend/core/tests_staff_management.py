@@ -118,7 +118,7 @@ class StaffManagementTests(APITestCase):
         # Manager can list (sees only cashiers) and create CASHIER
         list_res = self.client.get('/api/staff/')
         self.assertEqual(list_res.status_code, status.HTTP_200_OK)
-        self.assertTrue(all(u['role'] == 'CASHIER' for u in list_res.data))
+        self.assertTrue(all(u['role'] == 'CASHIER' for u in list_res.data['results']))
 
         create_cashier = self.client.post(
             '/api/staff/',
@@ -301,7 +301,7 @@ class StaffManagementTests(APITestCase):
 
         list_res = self.client.get('/api/staff/')
         self.assertEqual(list_res.status_code, status.HTTP_200_OK)
-        usernames = {u['username'] for u in list_res.data}
+        usernames = {u['username'] for u in list_res.data['results']}
         self.assertNotIn(self.cashier_b.username, usernames)
         self.assertNotIn(self.owner_b.username, usernames)
 

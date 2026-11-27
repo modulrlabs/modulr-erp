@@ -168,7 +168,8 @@ class RBACEnforcementTests(APITestCase):
         keeps GET /api/inventory/products/ at exactly 2 SQL queries for MANAGER.
         """
         token = self._get_access_token(self.manager)
-        with self.assertNumQueries(2):
+        # 3 queries: auth User+Shop+ShopSettings, pagination COUNT(*), paginated Product+Category
+        with self.assertNumQueries(3):
             res = self.client.get(
                 '/api/inventory/products/',
                 HTTP_AUTHORIZATION=f'Bearer {token}',
@@ -181,14 +182,14 @@ class RBACEnforcementTests(APITestCase):
         self.client.force_authenticate(user=self.cashier_a)
         res_cashier = self.client.get('/api/inventory/products/')
         self.assertEqual(res_cashier.status_code, status.HTTP_200_OK)
-        self.assertNotIn('cost_price', res_cashier.data[0])
+        self.assertNotIn('cost_price', res_cashier.data['results'][0])
 
         # Owner, Inventory Manager, Accountant: present
         for user in (self.owner, self.inventory_manager, self.accountant):
             self.client.force_authenticate(user=user)
             res = self.client.get('/api/inventory/products/')
             self.assertEqual(res.status_code, status.HTTP_200_OK)
-            self.assertIn('cost_price', res.data[0], f"Expected cost_price for {user.role}")
+            self.assertIn('cost_price', res.data['results'][0], f"Expected cost_price for {user.role}")
 
     def test_cashier_sees_only_own_invoices(self):
         """Cashiers see only their own invoices; OWNER sees all shop invoices."""
@@ -221,7 +222,7 @@ class RBACEnforcementTests(APITestCase):
         self.client.force_authenticate(user=self.cashier_a)
         res_list = self.client.get('/api/sales/invoices/')
         self.assertEqual(res_list.status_code, status.HTTP_200_OK)
-        returned_numbers = {item['invoice_number'] for item in res_list.data}
+        returned_numbers = {item['invoice_number'] for item in res_list.data['results']}
         self.assertEqual(returned_numbers, {'INV-CA-001'})
 
         # Direct retrieve of Cashier B's invoice returns 404
@@ -232,7 +233,7 @@ class RBACEnforcementTests(APITestCase):
         self.client.force_authenticate(user=self.owner)
         res_owner = self.client.get('/api/sales/invoices/')
         self.assertEqual(res_owner.status_code, status.HTTP_200_OK)
-        owner_numbers = {item['invoice_number'] for item in res_owner.data}
+        owner_numbers = {item['invoice_number'] for item in res_owner.data['results']}
         self.assertEqual(
             owner_numbers,
             {inv_a.invoice_number, inv_b.invoice_number, inv_owner.invoice_number},

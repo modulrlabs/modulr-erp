@@ -74,7 +74,7 @@ class MultiTenantDataIsolationTests(APITestCase):
         response = self.client.get('/api/inventory/products/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        product_names = [p['name'] for p in response.data]
+        product_names = [p['name'] for p in response.data['results']]
         self.assertIn("Alpha Tea", product_names)
         self.assertNotIn("Beta Coffee", product_names)
 
@@ -85,7 +85,7 @@ class MultiTenantDataIsolationTests(APITestCase):
         # 1. List invoices
         list_response = self.client.get('/api/sales/invoices/')
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)
-        invoice_numbers = [inv['invoice_number'] for inv in list_response.data]
+        invoice_numbers = [inv['invoice_number'] for inv in list_response.data['results']]
         self.assertIn("INV-A-0001", invoice_numbers)
         self.assertNotIn("INV-B-0001", invoice_numbers)
 
