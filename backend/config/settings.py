@@ -14,6 +14,7 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -258,6 +259,11 @@ AXES_RESET_ON_SUCCESS = True
 # ------------------------------------------------------------------------------
 # CORS & CSRF Configuration (Cross-Origin Resource Sharing)
 # ------------------------------------------------------------------------------
+CORS_ALLOW_HEADERS = [
+    *default_headers,
+    'idempotency-key',
+]
+
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 

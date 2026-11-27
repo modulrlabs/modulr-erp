@@ -105,6 +105,34 @@ export interface InvoiceItemResponse {
 export type PaymentMethod = 'CASH' | 'CARD' | 'CREDIT' | 'MIXED';
 export type InvoiceStatus = 'COMPLETED' | 'VOIDED' | 'PARTIALLY_RETURNED' | 'RETURNED';
 
+export interface SalesReturnItemResponse {
+  id: number;
+  public_id: string;
+  product: number;
+  product_name: string;
+  invoice_item: number;
+  quantity: string;
+  unit_price: string;
+  cost_price_at_sale?: string;
+  line_total: string;
+}
+
+export interface SalesReturnResponse {
+  id: number;
+  public_id: string;
+  return_number: string;
+  invoice: number;
+  invoice_number: string;
+  reason: string;
+  total_refund_amount: string;
+  credit_reversed: string;
+  cash_refunded: string;
+  processed_by: number | null;
+  processed_by_name?: string;
+  items: SalesReturnItemResponse[];
+  created_at: string;
+}
+
 export interface InvoiceResponse {
   id: number;
   public_id: string;
@@ -127,10 +155,86 @@ export interface InvoiceResponse {
   amount_paid: string;
   credit_amount: string;
   notes?: string;
+  void_reason?: string | null;
+  voided_at?: string | null;
+  voided_by?: number | null;
   items: InvoiceItemResponse[];
+  returns?: SalesReturnResponse[];
   whatsapp_share_url: string;
   created_at: string;
   updated_at?: string;
+}
+
+export interface SalesReturnCreatePayload {
+  reason: string;
+  items: {
+    invoice_item_id: number;
+    quantity: string;
+  }[];
+}
+
+export interface DashboardOperationalSection {
+  today_sales_total: string | number;
+  today_invoice_count: number;
+  sales_per_cashier_today: {
+    cashier__username: string | null;
+    invoice_count: number;
+    total_sales: string | number;
+  }[];
+  low_stock_count: number;
+  today_voided_count: number;
+  today_discounted_count: number;
+}
+
+export interface DashboardProfitSection {
+  today_gross_profit: string | number;
+  thirty_day_gross_profit: string | number;
+}
+
+export interface DashboardCashierSection {
+  my_sales_today_count: number;
+  my_sales_today_total: string | number;
+}
+
+export interface DashboardInventorySection {
+  low_stock_count: number;
+  low_stock_items: {
+    public_id: string;
+    name: string;
+    stock_quantity: string;
+    reorder_level: string;
+  }[];
+  recent_stock_movements: {
+    public_id: string;
+    product__name: string;
+    movement_type: string;
+    quantity_change: string;
+    balance_after: string;
+    created_at: string;
+  }[];
+  top_moving_items: {
+    product__public_id: string;
+    product__name: string;
+    units_sold: string;
+  }[];
+}
+
+export interface DashboardFinanceSection {
+  today_sales_total: string | number;
+  thirty_day_sales_total: string | number;
+  today_cash_collected: string | number;
+  total_tax_collected: string | number;
+  today_credit_issued?: string | number;
+  outstanding_credit_total?: string | number;
+  upcoming_cheques_7d_count?: number;
+}
+
+export interface DashboardSummaryResponse {
+  operational?: DashboardOperationalSection;
+  profit?: DashboardProfitSection;
+  cashier?: DashboardCashierSection;
+  inventory?: DashboardInventorySection;
+  finance?: DashboardFinanceSection;
 }
 
 export interface CartItem {

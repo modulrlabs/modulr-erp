@@ -9,7 +9,9 @@ import { ChangePasswordPage } from './features/auth/ChangePasswordPage';
 import { ForbiddenPage } from './features/auth/ForbiddenPage';
 import { LoginPage } from './features/auth/LoginPage';
 import { RegisterShopPage } from './features/auth/RegisterShopPage';
+import { DashboardPage } from './features/dashboard/DashboardPage';
 import { InventoryPage } from './features/inventory/InventoryPage';
+import { InvoicesPage } from './features/invoices/InvoicesPage';
 import { PosCheckoutPage } from './features/pos/PosCheckoutPage';
 import { getDefaultHomeRoute, useAuthStore } from './stores/authStore';
 import type { MeResponse, ShopProfile, UserProfile } from './types/erp';
@@ -151,8 +153,33 @@ export const App: React.FC = () => {
             <Route path="/change-password" element={<ChangePasswordPage />} />
             <Route path="/forbidden" element={<ForbiddenPage />} />
             <Route element={<Layout />}>
+              <Route
+                element={
+                  <PermissionGuard
+                    anyOf={[
+                      'dashboard.view_owner',
+                      'dashboard.view_operational',
+                      'dashboard.view_profit',
+                      'dashboard.view_cashier',
+                      'dashboard.view_inventory',
+                      'dashboard.view_finance',
+                    ]}
+                  />
+                }
+              >
+                <Route path="/dashboard" element={<DashboardPage />} />
+              </Route>
               <Route element={<PermissionGuard permission="sales.pos_checkout" />}>
                 <Route path="/pos" element={<PosCheckoutPage />} />
+              </Route>
+              <Route
+                element={
+                  <PermissionGuard
+                    anyOf={['sales.view_all_invoices', 'sales.view_own_invoices']}
+                  />
+                }
+              >
+                <Route path="/invoices" element={<InvoicesPage />} />
               </Route>
               <Route element={<PermissionGuard permission="inventory.view_products" />}>
                 <Route path="/inventory" element={<InventoryPage />} />
@@ -162,7 +189,7 @@ export const App: React.FC = () => {
           </Route>
 
           {/* Fallback Catch-all Route */}
-          <Route path="*" element={<Navigate to="/pos" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>
