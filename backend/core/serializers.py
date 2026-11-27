@@ -108,6 +108,55 @@ class ChangePasswordSerializer(serializers.Serializer):
         return value
 
 
+class StaffSerializer(serializers.ModelSerializer):
+    """
+    Read serializer for shop staff accounts exposed at /api/staff/.
+    """
+    class Meta:
+        model = User
+        fields = (
+            'id',
+            'public_id',
+            'username',
+            'email',
+            'first_name',
+            'last_name',
+            'role',
+            'is_active',
+            'must_change_password',
+            'date_joined',
+        )
+        read_only_fields = fields
+
+
+class StaffCreateSerializer(serializers.Serializer):
+    """
+    Input serializer for POST /api/staff/.
+    Username and temporary password are generated server-side.
+    """
+    first_name = serializers.CharField(max_length=150, required=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True, default='')
+    email = serializers.EmailField(required=False, allow_blank=True, default='')
+    role = serializers.ChoiceField(choices=User.Role.choices, default=User.Role.CASHIER)
+
+
+class StaffUpdateSerializer(serializers.ModelSerializer):
+    """
+    Input serializer for PATCH /api/staff/{public_id}/.
+    `username` is strictly read-only and cannot be changed.
+    """
+    class Meta:
+        model = User
+        fields = (
+            'username',
+            'first_name',
+            'last_name',
+            'email',
+            'role',
+        )
+        read_only_fields = ('username',)
+
+
 class ShopRegisterSerializer(serializers.Serializer):
     """
     Serializer for registering a brand-new Shop and its founding Owner User.
