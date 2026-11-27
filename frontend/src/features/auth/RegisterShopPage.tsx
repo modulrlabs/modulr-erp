@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { AlertCircle, Lock, Mail, MapPin, Phone, Store, User } from 'lucide-react';
-import { apiClient } from '../../api/client';
-import { useAuthStore } from '../../stores/authStore';
+import { apiClient, syncAuthMe } from '../../api/client';
+import { getDefaultHomeRoute, useAuthStore } from '../../stores/authStore';
 import type { RegisterShopPayload, ShopProfile, UserProfile } from '../../types/erp';
 
 export const RegisterShopPage: React.FC = () => {
@@ -76,8 +76,9 @@ export const RegisterShopPage: React.FC = () => {
         },
       };
 
-      setAuth(user, normalizedShop, tokens.access);
-      navigate('/pos', { replace: true });
+      setAuth(user, normalizedShop, tokens.access, [], false);
+      await syncAuthMe();
+      navigate(getDefaultHomeRoute(user.role), { replace: true });
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         const errorData = err.response?.data as Record<string, string | string[]> | undefined;

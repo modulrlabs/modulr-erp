@@ -1,13 +1,34 @@
 import React from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LogOut, Package, ShoppingCart, Store, User } from 'lucide-react';
+import { LogOut, Package, ShoppingCart, Store, User, WifiOff } from 'lucide-react';
 import { apiClient } from '../api/client';
+import { useIdleTimeout } from '../hooks/useIdleTimeout';
+import { useOnline } from '../hooks/useOnline';
 import { useAuthStore } from '../stores/authStore';
+import { Can } from './Can';
+
+const NAV_ITEMS = [
+  {
+    to: '/pos',
+    label: 'POS Billing',
+    icon: ShoppingCart,
+    permission: 'sales.pos_checkout',
+  },
+  {
+    to: '/inventory',
+    label: 'Inventory',
+    icon: Package,
+    permission: 'inventory.view_products',
+  },
+] as const;
 
 export const Layout: React.FC = () => {
   const { user, shop, clearAuth } = useAuthStore();
   const navigate = useNavigate();
   const [isLoggingOut, setIsLoggingOut] = React.useState(false);
+  const isOnline = useOnline();
+
+  useIdleTimeout();
 
   const handleLogout = async () => {
     try {
@@ -32,6 +53,18 @@ export const Layout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+      {!isOnline && (
+        <div
+          role="alert"
+          className="bg-amber-600 text-white px-4 py-2 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 shadow-sm"
+        >
+          <WifiOff className="h-4 w-4 shrink-0" />
+          <span>
+            You are offline. Checkouts and data updates are paused until your connection returns.
+          </span>
+        </div>
+      )}
+
       {/* Header Bar */}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -52,33 +85,26 @@ export const Layout: React.FC = () => {
             </div>
 
             <nav className="flex items-center gap-1 sm:gap-2">
-              <NavLink
-                to="/pos"
-                className={({ isActive }) =>
-                  `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
-                    isActive
-                      ? 'bg-indigo-50 text-indigo-700 shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                  }`
-                }
-              >
-                <ShoppingCart className="h-4 w-4" />
-                <span>POS Billing</span>
-              </NavLink>
-
-              <NavLink
-                to="/inventory"
-                className={({ isActive }) =>
-                  `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
-                    isActive
-                      ? 'bg-indigo-50 text-indigo-700 shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                  }`
-                }
-              >
-                <Package className="h-4 w-4" />
-                <span>Inventory</span>
-              </NavLink>
+              {NAV_ITEMS.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Can key={item.to} permission={item.permission}>
+                    <NavLink
+                      to={item.to}
+                      className={({ isActive }) =>
+                        `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                          isActive
+                            ? 'bg-indigo-50 text-indigo-700 shadow-sm'
+                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                        }`
+                      }
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  </Can>
+                );
+              })}
             </nav>
           </div>
 

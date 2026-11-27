@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { AlertCircle, Lock, Store, User } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import { useAuthStore } from '../../stores/authStore';
+import { getDefaultHomeRoute, useAuthStore } from '../../stores/authStore';
 import type { LoginResponse } from '../../types/erp';
 
 export const LoginPage: React.FC = () => {
@@ -16,7 +16,7 @@ export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/pos';
+  const from = (location.state as { from?: { pathname: string } })?.from?.pathname;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,9 +34,13 @@ export const LoginPage: React.FC = () => {
         password,
       });
 
-      const { access, user, shop } = response.data;
-      setAuth(user, shop, access);
-      navigate(from, { replace: true });
+      const { access, user, shop, permissions, must_change_password } = response.data;
+      setAuth(user, shop, access, permissions ?? [], Boolean(must_change_password));
+      if (must_change_password) {
+        navigate('/change-password', { replace: true });
+      } else {
+        navigate(from || getDefaultHomeRoute(user.role), { replace: true });
+      }
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         const status = err.response?.status;

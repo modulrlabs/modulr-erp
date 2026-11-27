@@ -1,17 +1,31 @@
 /**
  * TypeScript Data Contracts for Modulr ERP + POS SaaS
- * Strictly matching Django REST Framework serializers across core, inventory, and sales.
+ * Strictly aligned with Stage 1 Django REST Framework serializers.
  */
 
-export type UserRole = 'OWNER' | 'CASHIER';
+export type UserRole =
+  | 'OWNER'
+  | 'MANAGER'
+  | 'CASHIER'
+  | 'INVENTORY_MANAGER'
+  | 'ACCOUNTANT';
+
+export interface PaginatedResponse<T> {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: T[];
+}
 
 export interface UserProfile {
   id: number;
+  public_id?: string;
   username: string;
   email: string;
   first_name: string;
   last_name: string;
   role: UserRole;
+  must_change_password?: boolean;
   is_owner?: boolean;
   is_cashier?: boolean;
 }
@@ -31,6 +45,20 @@ export interface ShopProfile {
   features: ShopFeatures;
 }
 
+export type TaxMode = 'NONE' | 'INCLUSIVE' | 'EXCLUSIVE';
+
+export interface ShopSettings {
+  managers_can_edit_products: boolean;
+  managers_can_view_cost_price: boolean;
+  managers_can_view_profit: boolean;
+  managers_can_manage_purchasing: boolean;
+  managers_can_manage_cashiers: boolean;
+  cashier_max_discount_pct: string;
+  tax_mode: TaxMode;
+  tax_rate_pct: string;
+  tax_label: string;
+}
+
 export interface Category {
   id: number;
   public_id: string;
@@ -46,7 +74,7 @@ export interface Product {
   category_name: string | null;
   name: string;
   barcode: string | null;
-  cost_price?: string; // Hidden from Cashiers by ProductSerializer
+  cost_price?: string; // Absent when user lacks inventory.view_cost_price
   selling_price: string;
   stock_quantity: string;
   reorder_level: string;
@@ -90,6 +118,10 @@ export interface InvoiceResponse {
   cashier_name?: string;
   subtotal: string;
   discount: string;
+  tax_mode: TaxMode;
+  tax_rate_pct: string;
+  tax_label: string;
+  tax_amount: string;
   total_amount: string;
   payment_method: PaymentMethod;
   amount_paid: string;
@@ -103,9 +135,9 @@ export interface InvoiceResponse {
 
 export interface CartItem {
   product: Product;
-  quantity: string; // Stored as string to support precision decimal input like "0.250"
-  unitPrice: number;
-  lineTotal: number;
+  quantity: string; // Precision decimal string like "0.250"
+  unitPrice: string;
+  lineTotal: string;
 }
 
 export interface CheckoutPayload {
@@ -124,6 +156,18 @@ export interface LoginResponse {
   access: string;
   user: UserProfile;
   shop: ShopProfile | null;
+  permissions: string[];
+  must_change_password: boolean;
+}
+
+export interface MeResponse extends UserProfile {
+  shop: (Omit<ShopProfile, 'features'> & {
+    enable_credit_module?: boolean;
+    enable_whatsapp_alerts?: boolean;
+    features?: ShopFeatures;
+  }) | null;
+  permissions: string[];
+  must_change_password: boolean;
 }
 
 export interface RegisterShopPayload {

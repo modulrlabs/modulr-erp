@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import Decimal from 'decimal.js';
 import {
   AlertCircle,
   Barcode,
@@ -15,9 +16,22 @@ import {
   ShoppingCart,
   Trash2,
   UserCheck,
+  WifiOff,
   X,
 } from 'lucide-react';
-import { apiClient } from '../../api/client';
+import { getProductByBarcode, getProducts } from '../../api/inventory';
+import { createInvoice, getCustomers } from '../../api/sales';
+import { useOnline } from '../../hooks/useOnline';
+import {
+  formatLKR,
+  formatMoneyFixed,
+  formatQuantityFixed,
+  multiplyMoney,
+  parseMoney,
+  parseQuantity,
+  subtractMoney,
+  sumMoney,
+} from '../../lib/money';
 import { useAuthStore } from '../../stores/authStore';
 import type {
   CartItem,
@@ -30,6 +44,7 @@ import type {
 
 export const PosCheckoutPage: React.FC = () => {
   const { shop } = useAuthStore();
+  const isOnline = useOnline();
 
   // ---------------------------------------------------------------------------
   // Cart State
@@ -72,9 +87,8 @@ export const PosCheckoutPage: React.FC = () => {
   // Fetch customers if credit module is enabled
   useEffect(() => {
     if (shop?.features.enable_credit_module) {
-      apiClient
-        .get<Customer[]>('/sales/customers/')
-        .then((res) => setCustomers(res.data))
+      getCustomers(100)
+        .then((data) => setCustomers(data.results))
         .catch(() => {});
     }
   }, [shop?.features.enable_credit_module]);
@@ -88,8 +102,8 @@ export const PosCheckoutPage: React.FC = () => {
     const timer = setTimeout(async () => {
       try {
         setIsSearching(true);
-        const res = await apiClient.get<Product[]>(`/inventory/products/?search=${encodeURIComponent(searchQuery.trim())}`);
-        setSearchResults(res.data);
+        const data = await getProducts({ search: searchQuery.trim() });
+        setSearchResults(data.results);
       } catch {
         setSearchResults([]);
       } finally {
@@ -106,12 +120,13 @@ export const PosCheckoutPage: React.FC = () => {
   const addProductToCart = (product: Product, quantityToAdd: string = '1.000') => {
     setCart((prev) => {
       const existingIdx = prev.findIndex((item) => item.product.id === product.id);
-      const unitPrice = parseFloat(product.selling_price) || 0;
+      const unitPrice = formatMoneyFixed(product.selling_price);
 
       if (existingIdx >= 0) {
         const existing = prev[existingIdx];
-        const newQty = (parseFloat(existing.quantity) + parseFloat(quantityToAdd)).toFixed(3);
-        const newTotal = parseFloat(newQty) * unitPrice;
+        const newQtyDec = parseQuantity(existing.quantity).plus(parseQuantity(quantityToAdd));
+        const newQty = formatQuantityFixed(newQtyDec);
+        const newTotal = multiplyMoney(newQty, unitPrice).toFixed(2);
         const updated = [...prev];
         updated[existingIdx] = {
           ...existing,
@@ -120,14 +135,14 @@ export const PosCheckoutPage: React.FC = () => {
         };
         return updated;
       } else {
-        const qtyNum = parseFloat(quantityToAdd) || 1;
+        const qtyFixed = formatQuantityFixed(quantityToAdd || '1');
         return [
           ...prev,
           {
             product,
-            quantity: quantityToAdd,
+            quantity: qtyFixed,
             unitPrice,
-            lineTotal: qtyNum * unitPrice,
+            lineTotal: multiplyMoney(qtyFixed, unitPrice).toFixed(2),
           },
         ];
       }
@@ -141,17 +156,20 @@ export const PosCheckoutPage: React.FC = () => {
       prev
         .map((item) => {
           if (item.product.id !== productId) return item;
-          const num = parseFloat(newQtyStr);
-          if (isNaN(num) || num <= 0) {
-            return { ...item, quantity: newQtyStr, lineTotal: 0 };
+          if (newQtyStr.trim() === '') {
+            return { ...item, quantity: newQtyStr, lineTotal: '0.00' };
+          }
+          const qtyDec = parseQuantity(newQtyStr);
+          if (qtyDec.lte(0)) {
+            return { ...item, quantity: newQtyStr, lineTotal: '0.00' };
           }
           return {
             ...item,
             quantity: newQtyStr,
-            lineTotal: num * item.unitPrice,
+            lineTotal: multiplyMoney(qtyDec, item.unitPrice).toFixed(2),
           };
         })
-        .filter((item) => parseFloat(item.quantity) > 0 || item.quantity === '')
+        .filter((item) => item.quantity === '' || parseQuantity(item.quantity).gt(0))
     );
   };
 
@@ -178,8 +196,8 @@ export const PosCheckoutPage: React.FC = () => {
 
     setBarcodeError(null);
     try {
-      const res = await apiClient.get<Product>(`/inventory/products/by-barcode/?code=${encodeURIComponent(code)}`);
-      addProductToCart(res.data, '1.000');
+      const product = await getProductByBarcode(code);
+      addProductToCart(product, '1.000');
       setBarcodeInput('');
     } catch (err: unknown) {
       if (axios.isAxiosError(err) && err.response?.status === 404) {
@@ -193,21 +211,27 @@ export const PosCheckoutPage: React.FC = () => {
   };
 
   // ---------------------------------------------------------------------------
-  // Calculations
+  // Calculations (Decimal-safe)
   // ---------------------------------------------------------------------------
-  const subtotal = cart.reduce((sum, item) => sum + (item.lineTotal || 0), 0);
-  const discountNum = Math.max(0, parseFloat(discount) || 0);
-  const grandTotal = Math.max(0, subtotal - discountNum);
+  const subtotalDec = sumMoney(cart.map((item) => item.lineTotal));
+  const rawDiscountDec = parseMoney(discount);
+  const discountDec = rawDiscountDec.isNegative()
+    ? new Decimal(0)
+    : rawDiscountDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const rawGrandTotalDec = subtractMoney(subtotalDec, discountDec);
+  const grandTotalDec = rawGrandTotalDec.isNegative() ? new Decimal(0) : rawGrandTotalDec;
 
-  const amountPaidNum = parseFloat(amountPaid) || 0;
+  const amountPaidDec = parseMoney(amountPaid);
   const isCashOrMixed = paymentMethod === 'CASH' || paymentMethod === 'MIXED';
-  const effectivePaid =
+  const effectivePaidDec =
     amountPaid.trim() === '' && (paymentMethod === 'CASH' || paymentMethod === 'CARD')
-      ? grandTotal
-      : amountPaidNum;
+      ? grandTotalDec
+      : amountPaidDec;
 
-  const changeDue = Math.max(0, effectivePaid - grandTotal);
-  const creditDebt = Math.max(0, grandTotal - effectivePaid);
+  const rawChangeDueDec = subtractMoney(effectivePaidDec, grandTotalDec);
+  const changeDueDec = rawChangeDueDec.isNegative() ? new Decimal(0) : rawChangeDueDec;
+  const rawCreditDebtDec = subtractMoney(grandTotalDec, effectivePaidDec);
+  const creditDebtDec = rawCreditDebtDec.isNegative() ? new Decimal(0) : rawCreditDebtDec;
 
   // ---------------------------------------------------------------------------
   // Atomic POS Checkout with Idempotency-Key
@@ -215,12 +239,17 @@ export const PosCheckoutPage: React.FC = () => {
   const handleCheckout = async () => {
     setCheckoutError(null);
 
+    if (!isOnline) {
+      setCheckoutError('You are offline. Reconnect to the internet to complete checkout.');
+      return;
+    }
+
     if (cart.length === 0) {
       setCheckoutError('Cart is empty. Scan or select products to checkout.');
       return;
     }
 
-    if ((paymentMethod === 'CREDIT' || creditDebt > 0) && !selectedCustomerId) {
+    if ((paymentMethod === 'CREDIT' || creditDebtDec.gt(0)) && !selectedCustomerId) {
       setCheckoutError('A registered customer must be selected when issuing store credit / pay later.');
       return;
     }
@@ -231,24 +260,20 @@ export const PosCheckoutPage: React.FC = () => {
     const payload: CheckoutPayload = {
       customer: selectedCustomerId,
       payment_method: paymentMethod,
-      discount: discountNum.toFixed(2),
-      amount_paid: effectivePaid.toFixed(2),
+      discount: formatMoneyFixed(discountDec),
+      amount_paid: formatMoneyFixed(effectivePaidDec),
       notes: notes.trim(),
       items: cart.map((item) => ({
         product_id: item.product.id,
-        quantity: parseFloat(item.quantity).toFixed(3),
+        quantity: formatQuantityFixed(item.quantity),
       })),
     };
 
     try {
       setIsCheckingOut(true);
-      const res = await apiClient.post<InvoiceResponse>('/sales/invoices/', payload, {
-        headers: {
-          'Idempotency-Key': idempotencyKey,
-        },
-      });
+      const invoice = await createInvoice(payload, idempotencyKey);
 
-      setCreatedInvoice(res.data);
+      setCreatedInvoice(invoice);
       clearCart();
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
@@ -353,7 +378,7 @@ export const PosCheckoutPage: React.FC = () => {
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-sm font-bold text-indigo-600">LKR {parseFloat(product.selling_price).toFixed(2)}</div>
+                      <div className="text-sm font-bold text-indigo-600">{formatLKR(product.selling_price)}</div>
                       <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
                         <Plus className="h-3 w-3" /> Add
                       </span>
@@ -412,16 +437,16 @@ export const PosCheckoutPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="py-3 px-2 text-right text-slate-600">
-                        {item.unitPrice.toFixed(2)}
+                        {formatMoneyFixed(item.unitPrice)}
                       </td>
                       <td className="py-3 px-2">
                         <div className="flex items-center justify-center gap-1">
                           <button
                             type="button"
                             onClick={() => {
-                              const curr = parseFloat(item.quantity) || 0;
-                              if (curr > 1) {
-                                updateQuantity(item.product.id, (curr - 1).toFixed(3));
+                              const curr = parseQuantity(item.quantity);
+                              if (curr.gt(1)) {
+                                updateQuantity(item.product.id, formatQuantityFixed(curr.minus(1)));
                               }
                             }}
                             className="h-7 w-7 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200"
@@ -439,8 +464,8 @@ export const PosCheckoutPage: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const curr = parseFloat(item.quantity) || 0;
-                              updateQuantity(item.product.id, (curr + 1).toFixed(3));
+                              const curr = parseQuantity(item.quantity);
+                              updateQuantity(item.product.id, formatQuantityFixed(curr.plus(1)));
                             }}
                             className="h-7 w-7 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200"
                           >
@@ -449,7 +474,7 @@ export const PosCheckoutPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="py-3 px-2 text-right font-bold text-slate-900">
-                        {item.lineTotal.toFixed(2)}
+                        {formatMoneyFixed(item.lineTotal)}
                       </td>
                       <td className="py-3 pr-4 pl-2 text-center">
                         <button
@@ -481,7 +506,7 @@ export const PosCheckoutPage: React.FC = () => {
           <div className="space-y-2.5 text-sm">
             <div className="flex justify-between text-slate-600">
               <span>Subtotal</span>
-              <span className="font-semibold text-slate-900">LKR {subtotal.toFixed(2)}</span>
+              <span className="font-semibold text-slate-900">{formatLKR(subtotalDec)}</span>
             </div>
 
             <div className="flex items-center justify-between gap-4">
@@ -501,7 +526,7 @@ export const PosCheckoutPage: React.FC = () => {
 
             <div className="border-t border-slate-100 pt-3 flex justify-between items-baseline">
               <span className="text-base font-bold text-slate-900">Grand Total</span>
-              <span className="text-2xl font-black text-indigo-700">LKR {grandTotal.toFixed(2)}</span>
+              <span className="text-2xl font-black text-indigo-700">{formatLKR(grandTotalDec)}</span>
             </div>
           </div>
 
@@ -547,17 +572,17 @@ export const PosCheckoutPage: React.FC = () => {
           {(paymentMethod === 'CREDIT' || paymentMethod === 'MIXED' || shop?.features.enable_credit_module) && (
             <div>
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                Customer {paymentMethod === 'CREDIT' || creditDebt > 0 ? '*' : '(Optional)'}
+                Customer {paymentMethod === 'CREDIT' || creditDebtDec.gt(0) ? '*' : '(Optional)'}
               </label>
               <select
                 value={selectedCustomerId || ''}
-                onChange={(e) => setSelectedCustomerId(e.target.value ? parseInt(e.target.value) : null)}
+                onChange={(e) => setSelectedCustomerId(e.target.value ? parseInt(e.target.value, 10) : null)}
                 className="block w-full rounded-lg border border-slate-300 py-2 px-3 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600 bg-white"
               >
                 <option value="">-- Select Customer / Pay Later Client --</option>
                 {customers.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} ({c.phone || 'No phone'}) - Current Debt: LKR {parseFloat(c.total_credit_balance).toFixed(2)}
+                    {c.name} ({c.phone || 'No phone'}) - Current Debt: {formatLKR(c.total_credit_balance)}
                   </option>
                 ))}
               </select>
@@ -578,22 +603,22 @@ export const PosCheckoutPage: React.FC = () => {
                   min="0"
                   value={amountPaid}
                   onChange={(e) => setAmountPaid(e.target.value)}
-                  placeholder={grandTotal.toFixed(2)}
+                  placeholder={formatMoneyFixed(grandTotalDec)}
                   className="w-32 rounded-lg border border-slate-300 py-1.5 px-3 text-right text-sm font-semibold text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600 bg-white"
                 />
               </div>
 
-              {changeDue > 0 && (
+              {changeDueDec.gt(0) && (
                 <div className="flex justify-between items-center text-xs font-bold text-emerald-700 pt-1 border-t border-slate-200/60">
                   <span>Change to Return</span>
-                  <span className="text-base font-black">LKR {changeDue.toFixed(2)}</span>
+                  <span className="text-base font-black">{formatLKR(changeDueDec)}</span>
                 </div>
               )}
 
-              {creditDebt > 0 && (
+              {creditDebtDec.gt(0) && (
                 <div className="flex justify-between items-center text-xs font-bold text-amber-700 pt-1 border-t border-slate-200/60">
                   <span>Balance Due (Store Credit)</span>
-                  <span className="text-base font-black">LKR {creditDebt.toFixed(2)}</span>
+                  <span className="text-base font-black">{formatLKR(creditDebtDec)}</span>
                 </div>
               )}
             </div>
@@ -621,21 +646,33 @@ export const PosCheckoutPage: React.FC = () => {
             </div>
           )}
 
+          {!isOnline && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+              <WifiOff className="h-4 w-4 shrink-0 text-amber-600" />
+              <span>Offline mode: Checkout is disabled until internet connection is restored.</span>
+            </div>
+          )}
+
           {/* Complete Checkout Button */}
           <button
             onClick={handleCheckout}
-            disabled={isCheckingOut || cart.length === 0}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3.5 px-4 text-sm font-bold text-white shadow-md shadow-indigo-200 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 disabled:opacity-50 transition-all cursor-pointer"
+            disabled={!isOnline || isCheckingOut || cart.length === 0}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3.5 px-4 text-sm font-bold text-white shadow-md shadow-indigo-200 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer"
           >
             {isCheckingOut ? (
               <>
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
                 <span>Processing Transaction...</span>
               </>
+            ) : !isOnline ? (
+              <>
+                <WifiOff className="h-5 w-5" />
+                <span>Offline — Checkout Paused</span>
+              </>
             ) : (
               <>
                 <CheckCircle className="h-5 w-5" />
-                <span>Charge LKR {grandTotal.toFixed(2)}</span>
+                <span>Charge {formatLKR(grandTotalDec)}</span>
               </>
             )}
           </button>
@@ -678,11 +715,11 @@ export const PosCheckoutPage: React.FC = () => {
                     <div>
                       <span className="font-semibold text-slate-800">{item.product_name}</span>
                       <span className="text-slate-400 block text-[11px]">
-                        {item.quantity} x {parseFloat(item.unit_price).toFixed(2)}
+                        {item.quantity} x {formatMoneyFixed(item.unit_price)}
                       </span>
                     </div>
                     <span className="font-bold text-slate-900">
-                      LKR {parseFloat(item.line_total).toFixed(2)}
+                      {formatLKR(item.line_total)}
                     </span>
                   </div>
                 ))}
@@ -692,26 +729,35 @@ export const PosCheckoutPage: React.FC = () => {
               <div className="border-t border-slate-200 pt-2 space-y-1 text-xs">
                 <div className="flex justify-between text-slate-600">
                   <span>Subtotal</span>
-                  <span>LKR {parseFloat(createdInvoice.subtotal).toFixed(2)}</span>
+                  <span>{formatLKR(createdInvoice.subtotal)}</span>
                 </div>
-                {parseFloat(createdInvoice.discount) > 0 && (
+                {parseMoney(createdInvoice.discount).gt(0) && (
                   <div className="flex justify-between text-slate-600">
                     <span>Discount</span>
-                    <span>- LKR {parseFloat(createdInvoice.discount).toFixed(2)}</span>
+                    <span>- {formatLKR(createdInvoice.discount)}</span>
+                  </div>
+                )}
+                {createdInvoice.tax_mode !== 'NONE' && parseMoney(createdInvoice.tax_amount).gt(0) && (
+                  <div className="flex justify-between text-slate-600">
+                    <span>
+                      {createdInvoice.tax_label || 'Tax'} ({createdInvoice.tax_rate_pct}%
+                      {createdInvoice.tax_mode === 'INCLUSIVE' ? ' incl.' : ''})
+                    </span>
+                    <span>{formatLKR(createdInvoice.tax_amount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-sm font-extrabold text-slate-900 pt-1 border-t border-dashed border-slate-300">
                   <span>Total Paid</span>
-                  <span>LKR {parseFloat(createdInvoice.total_amount).toFixed(2)}</span>
+                  <span>{formatLKR(createdInvoice.total_amount)}</span>
                 </div>
                 <div className="flex justify-between text-[11px] text-slate-500">
                   <span>Method</span>
                   <span className="font-bold">{createdInvoice.payment_method}</span>
                 </div>
-                {parseFloat(createdInvoice.credit_amount) > 0 && (
+                {parseMoney(createdInvoice.credit_amount).gt(0) && (
                   <div className="flex justify-between text-xs font-bold text-amber-700">
                     <span>Store Credit Balance</span>
-                    <span>LKR {parseFloat(createdInvoice.credit_amount).toFixed(2)}</span>
+                    <span>{formatLKR(createdInvoice.credit_amount)}</span>
                   </div>
                 )}
               </div>
