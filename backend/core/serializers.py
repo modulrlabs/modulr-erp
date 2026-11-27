@@ -4,6 +4,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import AuditLog, Shop, User
+from .rbac import get_effective_permissions
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -55,21 +56,56 @@ class UserMeSerializer(serializers.ModelSerializer):
     Used by the GET /api/auth/me/ endpoint.
     """
     shop = ShopSerializer(read_only=True)
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
             'id',
+            'public_id',
             'username',
             'email',
             'first_name',
             'last_name',
             'role',
+            'must_change_password',
             'is_owner',
             'is_cashier',
             'shop',
+            'permissions',
         )
-        read_only_fields = ('id', 'role', 'is_owner', 'is_cashier', 'shop')
+        read_only_fields = (
+            'id',
+            'public_id',
+            'role',
+            'must_change_password',
+            'is_owner',
+            'is_cashier',
+            'shop',
+            'permissions',
+        )
+
+    def get_permissions(self, obj) -> list[str]:
+        return sorted(get_effective_permissions(obj))
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """
+    Validates current_password and new_password for POST /api/auth/change-password/.
+    """
+    current_password = serializers.CharField(write_only=True, required=True)
+    new_password = serializers.CharField(write_only=True, required=True, min_length=8)
+
+    def validate_current_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value
+
+    def validate_new_password(self, value):
+        user = self.context['request'].user
+        validate_password(value, user=user)
+        return value
 
 
 class ShopRegisterSerializer(serializers.Serializer):
@@ -234,12 +270,15 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Inject user and tenant details into the response payload
         data['user'] = {
             'id': user.id,
+            'public_id': str(user.public_id),
             'username': user.username,
             'email': user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
             'role': user.role,
         }
+        data['must_change_password'] = user.must_change_password
+        data['permissions'] = sorted(get_effective_permissions(user))
 
         if user.shop:
             data['shop'] = {

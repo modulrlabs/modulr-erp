@@ -179,7 +179,13 @@ def get_effective_permissions(user: User | None) -> frozenset[str]:
     if user.role == 'MANAGER':
         from .models import ShopSettings
 
-        shop_settings = ShopSettings.objects.filter(shop_id=shop.id).first()
+        # Reuse prefetched settings from select_related('shop__settings') when available
+        # to avoid extra queries per request; otherwise query live DB.
+        if 'settings' in shop._state.fields_cache:
+            shop_settings = shop._state.fields_cache['settings']
+        else:
+            shop_settings = ShopSettings.objects.filter(shop_id=shop.id).first()
+
         if shop_settings:
             for field_name, perm_code in MANAGER_SETTING_TOGGLES:
                 if getattr(shop_settings, field_name, False):
@@ -193,3 +199,20 @@ def get_effective_permissions(user: User | None) -> frozenset[str]:
         }
 
     return frozenset(perms)
+
+
+def get_request_permissions(request) -> frozenset[str]:
+    """
+    Returns per-request cached effective permissions, computing once if needed.
+    """
+    if request is None:
+        return frozenset()
+
+    cached = getattr(request, '_effective_permissions', None)
+    if cached is not None:
+        return cached
+
+    user = getattr(request, 'user', None)
+    perms = get_effective_permissions(user)
+    request._effective_permissions = perms
+    return perms

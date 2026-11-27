@@ -13,6 +13,8 @@ from rest_framework.views import APIView
 
 from core.audit import log_audit_event
 from core.mixins import ShopScopedViewSetMixin
+from core.permissions import HasPermission
+from core.rbac import get_request_permissions
 from inventory.models import Product, StockMovement
 
 from .models import (
@@ -24,7 +26,7 @@ from .models import (
     SalesReturn,
     SalesReturnItem,
 )
-from .permissions import IsCreditModuleEnabled, IsShopOwner
+from .permissions import IsCreditModuleEnabled
 from .serializers import (
     CreditPaymentSerializer,
     CustomerSerializer,
@@ -40,11 +42,19 @@ from .serializers import (
 class CustomerViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing customers and their credit accounts.
-    Guarded by 'enable_credit_module' and scoped to active shop tenant.
+    Guarded by 'enable_credit_module', RBAC v2 permissions, and scoped to active shop tenant.
     """
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
+    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled, HasPermission]
+    action_permissions = {
+        'list': ('credit.view_customers', 'credit.lookup_customers'),
+        'retrieve': ('credit.view_customers', 'credit.lookup_customers'),
+        'create': 'credit.manage_customers',
+        'update': 'credit.manage_customers',
+        'partial_update': 'credit.manage_customers',
+        'destroy': 'credit.manage_customers',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -79,10 +89,25 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         .select_related('customer', 'cashier')
         .prefetch_related('items__product', 'returns__items__product')
     )
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    action_permissions = {
+        'create': 'sales.pos_checkout',
+        'list': ('sales.view_all_invoices', 'sales.view_own_invoices'),
+        'retrieve': ('sales.view_all_invoices', 'sales.view_own_invoices'),
+        'void': 'sales.void_invoice',
+        'return_goods': 'sales.return_invoice',
+        'destroy': 'sales.void_invoice',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        perms = get_request_permissions(self.request)
+        if 'sales.view_all_invoices' not in perms:
+            if 'sales.view_own_invoices' in perms:
+                queryset = queryset.filter(cashier=self.request.user)
+            else:
+                return queryset.none()
 
         # Filter by status
         status_param = self.request.query_params.get('status')
@@ -172,7 +197,7 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         detail=True,
         methods=['post'],
         url_path='void',
-        permission_classes=[permissions.IsAuthenticated, IsShopOwner]
+        permission_classes=[permissions.IsAuthenticated, HasPermission]
     )
     def void(self, request, public_id=None):
         """
@@ -275,7 +300,7 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         detail=True,
         methods=['post'],
         url_path='return',
-        permission_classes=[permissions.IsAuthenticated]
+        permission_classes=[permissions.IsAuthenticated, HasPermission]
     )
     def return_goods(self, request, public_id=None):
         """
@@ -477,11 +502,19 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
 class CreditPaymentViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for settling customer credit accounts.
-    Guarded by 'enable_credit_module' and scoped to active shop tenant.
+    Guarded by 'enable_credit_module', RBAC v2 permissions, and scoped to active shop tenant.
     """
     queryset = CreditPayment.objects.all().select_related('customer', 'received_by')
     serializer_class = CreditPaymentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
+    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled, HasPermission]
+    action_permissions = {
+        'list': 'credit.view_ledger',
+        'retrieve': 'credit.view_ledger',
+        'create': 'credit.record_payment',
+        'update': 'credit.record_payment',
+        'partial_update': 'credit.record_payment',
+        'destroy': 'credit.record_payment',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -496,11 +529,20 @@ class CreditPaymentViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
 class PDChequeViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing Post-Dated Cheques.
-    Guarded by 'enable_credit_module' and scoped to active shop tenant.
+    Guarded by 'enable_credit_module', RBAC v2 permissions, and scoped to active shop tenant.
     """
     queryset = PDCheque.objects.all().select_related('customer')
     serializer_class = PDChequeSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
+    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled, HasPermission]
+    action_permissions = {
+        'list': 'cheques.view',
+        'retrieve': 'cheques.view',
+        'upcoming': 'cheques.view',
+        'create': 'cheques.manage',
+        'update': 'cheques.manage',
+        'partial_update': 'cheques.manage',
+        'destroy': 'cheques.manage',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -564,7 +606,8 @@ class DashboardAnalyticsView(APIView):
     - Subtracts returned merchandise revenue and profit from total_sales and gross_profit,
       reflecting true net profits.
     """
-    permission_classes = [permissions.IsAuthenticated, IsShopOwner]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    required_permission = 'dashboard.view_owner'
 
     @extend_schema(
         summary="Owner Business Dashboard Analytics",
@@ -686,21 +729,24 @@ class DashboardAnalyticsView(APIView):
             .order_by('-units_sold')[:5]
         )
 
+        kpis = {
+            "total_sales": total_sales,
+            "cash_collected": cash_collected,
+            "credit_issued": credit_issued,
+            "invoice_count": invoice_count,
+            "total_outstanding_credit": total_outstanding_credit,
+            "low_stock_count": low_stock_count,
+            "upcoming_cheques_count": upcoming_cheques_count,
+        }
+        if 'dashboard.view_profit' in get_request_permissions(request):
+            kpis["gross_profit"] = gross_profit
+
         return Response({
             "period": {
                 "days": days,
                 "start_date": str(start_date),
                 "end_date": str(today),
             },
-            "kpis": {
-                "total_sales": total_sales,
-                "gross_profit": gross_profit,
-                "cash_collected": cash_collected,
-                "credit_issued": credit_issued,
-                "invoice_count": invoice_count,
-                "total_outstanding_credit": total_outstanding_credit,
-                "low_stock_count": low_stock_count,
-                "upcoming_cheques_count": upcoming_cheques_count,
-            },
+            "kpis": kpis,
             "top_selling_products": list(top_selling),
         }, status=status.HTTP_200_OK)

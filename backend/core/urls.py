@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     AuditLogViewSet,
+    ChangePasswordView,
     CookieTokenRefreshView,
     CurrentUserView,
     CustomTokenObtainPairView,
@@ -19,4 +20,5 @@ urlpatterns = [
     path('token/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
     path('logout/', LogoutView.as_view(), name='auth_logout'),
     path('me/', CurrentUserView.as_view(), name='auth_me'),
+    path('change-password/', ChangePasswordView.as_view(), name='auth_change_password'),
 ]

@@ -12,9 +12,11 @@ from .audit import log_audit_event
 from .authentication import clear_refresh_cookie, enforce_cookie_csrf, set_refresh_cookie
 from .mixins import ShopScopedViewSetMixin
 from .models import AuditLog, User
-from .permissions import IsShopOwner
+from .permissions import HasPermission
+from .rbac import get_request_permissions
 from .serializers import (
     AuditLogSerializer,
+    ChangePasswordSerializer,
     CustomTokenObtainPairSerializer,
     ShopRegisterSerializer,
     ShopSerializer,
@@ -248,17 +250,23 @@ class LogoutView(APIView):
 
 class AuditLogViewSet(ShopScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
     """
-    Owner-only ViewSet for reviewing tenant audit trails.
-    - Read (GET): Restricted exclusively to Shop Owners (Cashiers receive 403 Forbidden).
+    RBAC-guarded ViewSet for reviewing tenant audit trails.
+    - Read (GET): Requires `audit.view_all` or `audit.view_staff`.
+      Users with only `audit.view_staff` (e.g. MANAGER) see staff operational actions only.
     - Writes (POST, PUT, PATCH, DELETE): Blocked at router/viewset level (ReadOnlyModelViewSet).
     - Scoping: Automatically scoped to request.user.shop via ShopScopedViewSetMixin.
     """
     queryset = AuditLog.objects.all().select_related('actor', 'shop')
     serializer_class = AuditLogSerializer
-    permission_classes = [permissions.IsAuthenticated, IsShopOwner]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    required_permission = ('audit.view_all', 'audit.view_staff')
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        perms = get_request_permissions(self.request)
+        if 'audit.view_all' not in perms:
+            queryset = queryset.filter(actor__isnull=False).exclude(actor__role=User.Role.OWNER)
 
         action_param = self.request.query_params.get('action')
         if action_param:
@@ -297,3 +305,43 @@ class CurrentUserView(APIView):
     def get(self, request, *args, **kwargs):
         serializer = UserMeSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ChangePasswordView(APIView):
+    """
+    Endpoint for authenticated users to change their password: POST /api/auth/change-password/
+    Clears `must_change_password` flag and logs PASSWORD_CHANGED to AuditLog.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(
+        request=ChangePasswordSerializer,
+        responses={200: dict},
+        summary="Change current user's password"
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = ChangePasswordSerializer(
+            data=request.data,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        user.set_password(serializer.validated_data['new_password'])
+        user.must_change_password = False
+        user.save(update_fields=['password', 'must_change_password'])
+
+        log_audit_event(
+            action='PASSWORD_CHANGED',
+            target_model='User',
+            target_id=str(getattr(user, 'public_id', user.pk)),
+            shop=getattr(user, 'shop', None),
+            actor=user,
+            actor_username=user.username,
+            after_state={'force_reset_cleared': True},
+        )
+
+        return Response(
+            {"message": "Password changed successfully."},
+            status=status.HTTP_200_OK,
+        )

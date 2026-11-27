@@ -7,6 +7,7 @@ from rest_framework import serializers
 
 from core.audit import log_audit_event
 from core.mixins import validate_tenant_fk
+from core.rbac import get_request_permissions
 from inventory.models import Product, StockMovement
 
 from .models import (
@@ -68,7 +69,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
         """
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and not getattr(request.user, 'is_owner', False):
+        if request and 'inventory.view_cost_price' not in get_request_permissions(request):
             self.fields.pop('cost_price_at_sale', None)
 
 
@@ -348,7 +349,7 @@ class SalesReturnItemSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and not getattr(request.user, 'is_owner', False):
+        if request and 'inventory.view_cost_price' not in get_request_permissions(request):
             self.fields.pop('cost_price_at_sale', None)
 
 

@@ -12,9 +12,9 @@ from rest_framework.response import Response
 
 from core.audit import log_audit_event
 from core.mixins import ShopScopedViewSetMixin
+from core.permissions import HasPermission
 
 from .models import Category, Product, StockMovement
-from .permissions import IsShopOwner, IsShopOwnerOrReadOnly
 from .serializers import (
     CategorySerializer,
     ProductCSVUploadSerializer,
@@ -25,25 +25,44 @@ from .serializers import (
 class CategoryViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing product categories.
-    - Read (GET): Allowed for both Cashiers and Owners.
-    - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    - Read (GET): Requires `inventory.view_products`.
+    - Write (POST, PUT, PATCH, DELETE): Requires `inventory.manage_products`.
     - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
-    permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    action_permissions = {
+        'list': 'inventory.view_products',
+        'retrieve': 'inventory.view_products',
+        'create': 'inventory.manage_products',
+        'update': 'inventory.manage_products',
+        'partial_update': 'inventory.manage_products',
+        'destroy': 'inventory.manage_products',
+    }
 
 
 class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing products, barcode lookups, and bulk CSV imports.
-    - Read (GET): Allowed for both Cashiers and Owners.
-    - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    - Read / by_barcode: Requires `inventory.view_products`.
+    - Create / Update / Delete: Requires `inventory.manage_products`.
+    - upload_csv: Requires `inventory.csv_import`.
     - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
     queryset = Product.objects.all().select_related('category')
     serializer_class = ProductSerializer
-    permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    action_permissions = {
+        'list': 'inventory.view_products',
+        'retrieve': 'inventory.view_products',
+        'by_barcode': 'inventory.view_products',
+        'create': 'inventory.manage_products',
+        'update': 'inventory.manage_products',
+        'partial_update': 'inventory.manage_products',
+        'destroy': 'inventory.manage_products',
+        'upload_csv': 'inventory.csv_import',
+    }
 
     def get_queryset(self):
         """
@@ -188,7 +207,7 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         detail=False,
         methods=['post'],
         url_path='upload-csv',
-        permission_classes=[permissions.IsAuthenticated, IsShopOwner],
+        permission_classes=[permissions.IsAuthenticated, HasPermission],
         parser_classes=[MultiPartParser, FormParser]
     )
     def upload_csv(self, request):
