@@ -2,11 +2,11 @@ from decimal import Decimal
 
 from django.db import models
 
-from core.models import ShopAwareModel, User
+from core.models import ShopAwareModel, SoftDeleteModelMixin, User
 from inventory.models import Product
 
 
-class Customer(ShopAwareModel):
+class Customer(SoftDeleteModelMixin, ShopAwareModel):
     """
     Represents a client or wholesale customer of a shop.
 

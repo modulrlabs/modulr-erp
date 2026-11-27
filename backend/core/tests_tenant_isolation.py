@@ -185,7 +185,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         # 1. List: Category B must not appear in Shop A's category list
         res = self.client.get("/api/inventory/categories/")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        cat_ids = [c["id"] for c in res.data]
+        cat_ids = [c["id"] for c in res.data["results"]]
         self.assertIn(self.category_a.id, cat_ids)
         self.assertNotIn(self.category_b.id, cat_ids)
 
@@ -214,7 +214,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         # 1. List
         res = self.client.get("/api/inventory/products/")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        prod_ids = [p["id"] for p in res.data]
+        prod_ids = [p["id"] for p in res.data["results"]]
         self.assertIn(self.product_a.id, prod_ids)
         self.assertNotIn(self.product_b.id, prod_ids)
 
@@ -243,7 +243,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         # 1. List
         res = self.client.get("/api/sales/customers/")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        cust_ids = [c["id"] for c in res.data]
+        cust_ids = [c["id"] for c in res.data["results"]]
         self.assertIn(self.customer_a.id, cust_ids)
         self.assertNotIn(self.customer_b.id, cust_ids)
 
@@ -272,7 +272,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         # 1. List
         res = self.client.get("/api/sales/invoices/")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        inv_ids = [inv["id"] for inv in res.data]
+        inv_ids = [inv["id"] for inv in res.data["results"]]
         self.assertIn(self.invoice_a.id, inv_ids)
         self.assertNotIn(self.invoice_b.id, inv_ids)
 
@@ -287,7 +287,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         # 1. List
         res = self.client.get("/api/sales/credit-payments/")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        payment_ids = [cp["id"] for cp in res.data]
+        payment_ids = [cp["id"] for cp in res.data["results"]]
         self.assertIn(self.credit_payment_a.id, payment_ids)
         self.assertNotIn(self.credit_payment_b.id, payment_ids)
 
@@ -314,7 +314,7 @@ class SystematicTenantIsolationSecurityTests(APITestCase):
         # 1. List
         res = self.client.get("/api/sales/pd-cheques/")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        chq_ids = [c["id"] for c in res.data]
+        chq_ids = [c["id"] for c in res.data["results"]]
         self.assertIn(self.pd_cheque_a.id, chq_ids)
         self.assertNotIn(self.pd_cheque_b.id, chq_ids)
 

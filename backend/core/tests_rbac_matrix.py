@@ -226,7 +226,7 @@ class FiveRolePermissionMatrixTests(APITestCase):
             status.HTTP_201_CREATED,
         )
         prod_list = self.client.get('/api/inventory/products/')
-        self.assertIn('cost_price', prod_list.data[0])
+        self.assertIn('cost_price', prod_list.data['results'][0])
         dash_res = self.client.get('/api/dashboard/summary/')
         self.assertIn('profit', dash_res.data)
         self.assertEqual(self.client.get('/api/staff/').status_code, status.HTTP_200_OK)
@@ -252,7 +252,7 @@ class FiveRolePermissionMatrixTests(APITestCase):
             ).status_code,
             status.HTTP_403_FORBIDDEN,
         )
-        self.assertNotIn('cost_price', self.client.get('/api/inventory/products/').data[0])
+        self.assertNotIn('cost_price', self.client.get('/api/inventory/products/').data['results'][0])
         self.assertNotIn('profit', self.client.get('/api/dashboard/summary/').data)
         self.assertEqual(self.client.get('/api/staff/').status_code, status.HTTP_403_FORBIDDEN)
 

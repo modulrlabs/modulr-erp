@@ -3,7 +3,6 @@ import io
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
-from django.db.models import F, Q
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -11,9 +10,10 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from core.audit import log_audit_event
-from core.mixins import ShopScopedViewSetMixin
+from core.mixins import ShopScopedViewSetMixin, SoftDeleteViewSetMixin
 from core.permissions import HasPermission
 
+from .filters import ProductFilter
 from .models import Category, Product, StockMovement
 from .serializers import (
     CategorySerializer,
@@ -22,16 +22,19 @@ from .serializers import (
 )
 
 
-class CategoryViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
+class CategoryViewSet(SoftDeleteViewSetMixin, ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing product categories.
     - Read (GET): Requires `inventory.view_products`.
-    - Write (POST, PUT, PATCH, DELETE): Requires `inventory.manage_products`.
+    - Write / Soft Delete / Restore: Requires `inventory.manage_products`.
     - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [permissions.IsAuthenticated, HasPermission]
+    search_fields = ['name']
+    ordering_fields = ['name', 'created_at']
+    ordering = ['name']
     action_permissions = {
         'list': 'inventory.view_products',
         'retrieve': 'inventory.view_products',
@@ -39,20 +42,25 @@ class CategoryViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         'update': 'inventory.manage_products',
         'partial_update': 'inventory.manage_products',
         'destroy': 'inventory.manage_products',
+        'restore': 'inventory.manage_products',
     }
 
 
-class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
+class ProductViewSet(SoftDeleteViewSetMixin, ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing products, barcode lookups, and bulk CSV imports.
     - Read / by_barcode: Requires `inventory.view_products`.
-    - Create / Update / Delete: Requires `inventory.manage_products`.
+    - Create / Update / Soft Delete / Restore: Requires `inventory.manage_products`.
     - upload_csv: Requires `inventory.csv_import`.
     - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
     queryset = Product.objects.all().select_related('category')
     serializer_class = ProductSerializer
     permission_classes = [permissions.IsAuthenticated, HasPermission]
+    filterset_class = ProductFilter
+    search_fields = ['name', 'barcode']
+    ordering_fields = ['name', 'selling_price', 'stock_quantity', 'created_at']
+    ordering = ['name']
     action_permissions = {
         'list': 'inventory.view_products',
         'retrieve': 'inventory.view_products',
@@ -61,35 +69,16 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         'update': 'inventory.manage_products',
         'partial_update': 'inventory.manage_products',
         'destroy': 'inventory.manage_products',
+        'restore': 'inventory.manage_products',
         'adjust_stock': 'inventory.adjust_stock',
         'upload_csv': 'inventory.csv_import',
     }
 
     def get_queryset(self):
-        """
-        WHY: Systematic tenant scoping via super().get_queryset() combined with
-        POS search and filtering query parameters.
-        """
         queryset = super().get_queryset()
-
-        # 1. Text Search (searches name OR barcode)
-        search_query = self.request.query_params.get('search', '').strip()
-        if search_query:
-            queryset = queryset.filter(
-                Q(name__icontains=search_query) |
-                Q(barcode__icontains=search_query)
-            )
-
-        # 2. Filter by Category
         category_id = self.request.query_params.get('category')
         if category_id:
             queryset = queryset.filter(category_id=category_id)
-
-        # 3. Filter Low Stock Items (useful for inventory management)
-        low_stock = self.request.query_params.get('low_stock', '').lower()
-        if low_stock in ('true', '1'):
-            queryset = queryset.filter(stock_quantity__lte=F('reorder_level'))
-
         return queryset
 
     def perform_create(self, serializer):
@@ -344,13 +333,18 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
                 if category_name:
                     category_instance, _ = Category.objects.get_or_create(
                         shop=shop,
-                        name=category_name
+                        name=category_name,
+                        is_deleted=False,
                     )
 
-                # Upsert Product: If barcode matches existing product in this shop, update it
+                # Upsert Product: If barcode matches existing active product in this shop, update it
                 product = None
                 if barcode:
-                    product = Product.objects.filter(shop=shop, barcode=barcode).first()
+                    product = Product.objects.filter(
+                        shop=shop,
+                        barcode=barcode,
+                        is_deleted=False,
+                    ).first()
 
                 if product:
                     old_stock = product.stock_quantity

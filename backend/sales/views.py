@@ -2,7 +2,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, models, transaction
-from django.db.models import Count, F, Q, Sum
+from django.db.models import Count, F, Sum
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import permissions, status, viewsets
@@ -12,11 +12,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.audit import log_audit_event
-from core.mixins import ShopScopedViewSetMixin
+from core.mixins import ShopScopedViewSetMixin, SoftDeleteViewSetMixin
 from core.permissions import EnforcePasswordChange, HasPermission
 from core.rbac import get_request_permissions
 from inventory.models import Product, StockMovement
 
+from .filters import CustomerFilter, InvoiceFilter, PDChequeFilter
 from .models import (
     CreditPayment,
     Customer,
@@ -39,7 +40,7 @@ from .serializers import (
 )
 
 
-class CustomerViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
+class CustomerViewSet(SoftDeleteViewSetMixin, ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing customers and their credit accounts.
     Guarded by 'enable_credit_module', RBAC v2 permissions, and scoped to active shop tenant.
@@ -47,6 +48,10 @@ class CustomerViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
     permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled, HasPermission]
+    filterset_class = CustomerFilter
+    search_fields = ['name', 'phone']
+    ordering_fields = ['name', 'total_credit_balance', 'created_at']
+    ordering = ['name']
     action_permissions = {
         'list': ('credit.view_customers', 'credit.lookup_customers'),
         'retrieve': ('credit.view_customers', 'credit.lookup_customers'),
@@ -54,23 +59,22 @@ class CustomerViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         'update': 'credit.manage_customers',
         'partial_update': 'credit.manage_customers',
         'destroy': 'credit.manage_customers',
+        'restore': 'credit.manage_customers',
     }
+
+    def perform_destroy(self, instance):
+        if instance.total_credit_balance > Decimal('0.00'):
+            raise ValidationError(
+                {"detail": "Cannot delete a customer with an outstanding credit balance."}
+            )
+        super().perform_destroy(instance)
 
     def get_queryset(self):
         queryset = super().get_queryset()
-
-        # Optional search by customer name or phone number
-        search = self.request.query_params.get('search', '').strip()
-        if search:
-            queryset = queryset.filter(
-                Q(name__icontains=search) | Q(phone__icontains=search)
-            )
-
-        # Optional filter for customers with outstanding debt
+        # Preserve backwards compatibility for ?has_debt=true
         has_debt = self.request.query_params.get('has_debt', '').lower()
         if has_debt in ('true', '1'):
             queryset = queryset.filter(total_credit_balance__gt=0)
-
         return queryset
 
 
@@ -90,6 +94,10 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         .prefetch_related('items__product', 'returns__items__product')
     )
     permission_classes = [permissions.IsAuthenticated, HasPermission]
+    filterset_class = InvoiceFilter
+    search_fields = ['invoice_number', 'customer__name', 'customer__phone']
+    ordering_fields = ['created_at', 'total_amount']
+    ordering = ['-created_at']
     action_permissions = {
         'create': 'sales.pos_checkout',
         'list': ('sales.view_all_invoices', 'sales.view_own_invoices'),
@@ -108,30 +116,6 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
                 queryset = queryset.filter(cashier=self.request.user)
             else:
                 return queryset.none()
-
-        # Filter by status
-        status_param = self.request.query_params.get('status')
-        if status_param:
-            queryset = queryset.filter(status=status_param.upper())
-
-        # Filter by customer
-        customer_id = self.request.query_params.get('customer')
-        if customer_id:
-            queryset = queryset.filter(customer_id=customer_id)
-
-        # Filter by payment method
-        payment_method = self.request.query_params.get('payment_method')
-        if payment_method:
-            queryset = queryset.filter(payment_method=payment_method.upper())
-
-        # Search by invoice number
-        search = self.request.query_params.get('search', '').strip()
-        if search:
-            queryset = queryset.filter(
-                Q(invoice_number__icontains=search) |
-                Q(customer__name__icontains=search) |
-                Q(customer__phone__icontains=search)
-            )
 
         return queryset
 
@@ -534,6 +518,10 @@ class PDChequeViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     queryset = PDCheque.objects.all().select_related('customer')
     serializer_class = PDChequeSerializer
     permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled, HasPermission]
+    filterset_class = PDChequeFilter
+    search_fields = ['cheque_number', 'bank_name', 'customer__name']
+    ordering_fields = ['due_date', 'amount', 'created_at']
+    ordering = ['due_date']
     action_permissions = {
         'list': 'cheques.view',
         'retrieve': 'cheques.view',
@@ -543,16 +531,6 @@ class PDChequeViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         'partial_update': 'cheques.manage',
         'destroy': 'cheques.manage',
     }
-
-    def get_queryset(self):
-        queryset = super().get_queryset()
-
-        # Filter by status (e.g. ?status=PENDING)
-        status_param = self.request.query_params.get('status')
-        if status_param:
-            queryset = queryset.filter(status=status_param.upper())
-
-        return queryset
 
     def perform_update(self, serializer):
         """
@@ -588,13 +566,13 @@ class PDChequeViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
             due_date__lte=next_week
         ).order_by('due_date')
 
+        page = self.paginate_queryset(upcoming_cheques)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
         serializer = self.get_serializer(upcoming_cheques, many=True)
-        return Response({
-            "start_date": str(today),
-            "end_date": str(next_week),
-            "count": upcoming_cheques.count(),
-            "cheques": serializer.data,
-        }, status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class DashboardAnalyticsView(APIView):

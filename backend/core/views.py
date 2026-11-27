@@ -1,6 +1,5 @@
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
@@ -13,6 +12,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .audit import log_audit_event
 from .authentication import clear_refresh_cookie, enforce_cookie_csrf, set_refresh_cookie
+from .filters import AuditLogFilter
 from .mixins import ShopScopedViewSetMixin
 from .models import AuditLog, ShopSettings, User
 from .permissions import HasPermission
@@ -274,6 +274,10 @@ class AuditLogViewSet(ShopScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = AuditLogSerializer
     permission_classes = [permissions.IsAuthenticated, HasPermission]
     required_permission = ('audit.view_all', 'audit.view_staff')
+    filterset_class = AuditLogFilter
+    search_fields = ['actor_username', 'target_id', 'action']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -281,22 +285,6 @@ class AuditLogViewSet(ShopScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
         perms = get_request_permissions(self.request)
         if 'audit.view_all' not in perms:
             queryset = queryset.filter(actor__isnull=False).exclude(actor__role=User.Role.OWNER)
-
-        action_param = self.request.query_params.get('action')
-        if action_param:
-            queryset = queryset.filter(action=action_param.strip().upper())
-
-        target_model = self.request.query_params.get('target_model')
-        if target_model:
-            queryset = queryset.filter(target_model__iexact=target_model.strip())
-
-        search = self.request.query_params.get('search', '').strip()
-        if search:
-            queryset = queryset.filter(
-                Q(actor_username__icontains=search) |
-                Q(target_id__icontains=search) |
-                Q(action__icontains=search)
-            )
 
         return queryset
 

@@ -1,6 +1,7 @@
 import uuid
 from decimal import Decimal
 
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
@@ -224,6 +225,25 @@ class ShopAwareModel(models.Model):
     updated_at = models.DateTimeField(
         auto_now=True,
         help_text="Timestamp when the record was last modified."
+    )
+
+    class Meta:
+        abstract = True
+
+
+class SoftDeleteModelMixin(models.Model):
+    """
+    Abstract mixin adding soft-delete tracking fields so historical InvoiceItem /
+    StockMovement / CreditPayment foreign keys are never broken by deletions.
+    """
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
     )
 
     class Meta:

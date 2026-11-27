@@ -328,7 +328,7 @@ class AuditLogEndpointSecurityTests(APITestCase):
         # 1. List logs: only Shop A logs returned
         res = self.client.get("/api/core/audit-logs/")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        log_ids = [entry["public_id"] for entry in res.data]
+        log_ids = [entry["public_id"] for entry in res.data["results"]]
         self.assertIn(str(self.log_a.public_id), log_ids)
         self.assertNotIn(str(self.log_b.public_id), log_ids)
 
@@ -343,18 +343,18 @@ class AuditLogEndpointSecurityTests(APITestCase):
         # Filter by action
         res = self.client.get("/api/core/audit-logs/?action=PRODUCT_CREATED")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 1)
+        self.assertEqual(len(res.data["results"]), 1)
 
         res_none = self.client.get("/api/core/audit-logs/?action=NON_EXISTENT")
         self.assertEqual(res_none.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res_none.data), 0)
+        self.assertEqual(len(res_none.data["results"]), 0)
 
         # Filter by target_model
         res_model = self.client.get("/api/core/audit-logs/?target_model=Product")
         self.assertEqual(res_model.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res_model.data), 1)
+        self.assertEqual(len(res_model.data["results"]), 1)
 
         # Search by target_id
         res_search = self.client.get("/api/core/audit-logs/?search=prod-alpha")
         self.assertEqual(res_search.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res_search.data), 1)
+        self.assertEqual(len(res_search.data["results"]), 1)

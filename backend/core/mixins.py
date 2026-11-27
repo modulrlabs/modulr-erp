@@ -1,5 +1,12 @@
-from rest_framework import serializers
-from rest_framework.exceptions import PermissionDenied
+from django.db import IntegrityError
+from django.utils import timezone
+from rest_framework import permissions, serializers, status
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.response import Response
+
+from .audit import log_audit_event
+from .permissions import HasPermission
 
 
 class ShopScopedViewSetMixin:
@@ -41,7 +48,10 @@ class ShopScopedViewSetMixin:
         if not shop or not shop.is_active:
             raise PermissionDenied("Active shop membership required.")
 
-        return super().get_queryset().filter(shop=shop)
+        qs = super().get_queryset().filter(shop=shop)
+        if hasattr(qs.model, "is_deleted") and getattr(self, "action", None) != "restore":
+            qs = qs.filter(is_deleted=False)
+        return qs
 
     def perform_create(self, serializer):
         """
@@ -56,6 +66,66 @@ class ShopScopedViewSetMixin:
             raise PermissionDenied("Active shop membership required.")
 
         serializer.save(shop=shop)
+
+
+class SoftDeleteViewSetMixin:
+    """
+    Reusable soft-delete and restore behavior for ViewSets whose models inherit
+    `SoftDeleteModelMixin` (`Category`, `Product`, `Customer`).
+    """
+
+    def perform_destroy(self, instance):
+        instance.is_deleted = True
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.save(update_fields=["is_deleted", "deleted_at", "deleted_by", "updated_at"])
+
+        log_audit_event(
+            action="SOFT_DELETED",
+            target_model=instance.__class__.__name__,
+            target_id=str(instance.public_id),
+            shop=self.request.user.shop,
+            actor=self.request.user,
+            before_state={"is_deleted": False},
+            after_state={"is_deleted": True},
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="restore",
+        permission_classes=[permissions.IsAuthenticated, HasPermission],
+    )
+    def restore(self, request, public_id=None):
+        instance = self.get_object()
+        if not instance.is_deleted:
+            raise ValidationError({"detail": "This record is not deleted."})
+
+        instance.is_deleted = False
+        instance.deleted_at = None
+        instance.deleted_by = None
+        try:
+            instance.save(update_fields=["is_deleted", "deleted_at", "deleted_by", "updated_at"])
+        except IntegrityError as exc:
+            raise ValidationError({
+                "detail": (
+                    "Cannot restore: an active record with a conflicting unique "
+                    "value already exists."
+                )
+            }) from exc
+
+        log_audit_event(
+            action="RESTORED",
+            target_model=instance.__class__.__name__,
+            target_id=str(instance.public_id),
+            shop=request.user.shop,
+            actor=request.user,
+            before_state={"is_deleted": True},
+            after_state={"is_deleted": False},
+        )
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 def validate_tenant_fk(obj, shop, field_name="resource"):

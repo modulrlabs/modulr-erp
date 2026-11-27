@@ -2,10 +2,10 @@ from decimal import Decimal
 
 from django.db import models
 
-from core.models import ShopAwareModel, User
+from core.models import ShopAwareModel, SoftDeleteModelMixin, User
 
 
-class Category(ShopAwareModel):
+class Category(SoftDeleteModelMixin, ShopAwareModel):
     """
     Categorizes products for a shop (e.g., 'Groceries', 'Beverages', 'Electronics').
 
@@ -27,16 +27,19 @@ class Category(ShopAwareModel):
         verbose_name = 'Category'
         verbose_name_plural = 'Categories'
         ordering = ['name']
-        # WHY unique_together:
-        # A shop cannot have two categories with the exact same name,
-        # but Shop A and Shop B can both have their own "Dairy" category.
-        unique_together = ('shop', 'name')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['shop', 'name'],
+                condition=models.Q(is_deleted=False),
+                name='unique_active_category_name_per_shop',
+            )
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.shop.name})"
 
 
-class Product(ShopAwareModel):
+class Product(SoftDeleteModelMixin, ShopAwareModel):
     """
     Represents an inventory item sold at the POS.
 
@@ -92,11 +95,13 @@ class Product(ShopAwareModel):
         verbose_name = 'Product'
         verbose_name_plural = 'Products'
         ordering = ['name']
-        # WHY unique_together:
-        # Shop A and Shop B might both sell "Coca Cola 500ml" with the identical universal barcode 5449000000996.
-        # A global unique constraint on barcode would prevent Shop B from adding it!
-        # Scoping uniqueness to ('shop', 'barcode') guarantees multi-tenant coexistence.
-        unique_together = ('shop', 'barcode')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['shop', 'barcode'],
+                condition=models.Q(is_deleted=False, barcode__isnull=False),
+                name='unique_active_product_barcode_per_shop',
+            )
+        ]
 
     @property
     def is_low_stock(self) -> bool:
