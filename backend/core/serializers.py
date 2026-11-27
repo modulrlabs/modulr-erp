@@ -99,7 +99,7 @@ class UserMeSerializer(serializers.ModelSerializer):
 
 class ShopSettingsSerializer(serializers.ModelSerializer):
     """
-    Serializer for Owner-managed RBAC delegation toggles and cashier discount cap.
+    Serializer for Owner-managed RBAC delegation toggles, cashier discount cap, and tax settings.
     """
     class Meta:
         model = ShopSettings
@@ -110,6 +110,9 @@ class ShopSettingsSerializer(serializers.ModelSerializer):
             'managers_can_manage_purchasing',
             'managers_can_manage_cashiers',
             'cashier_max_discount_pct',
+            'tax_mode',
+            'tax_rate_pct',
+            'tax_label',
         )
 
     def validate_cashier_max_discount_pct(self, value):
@@ -118,6 +121,27 @@ class ShopSettingsSerializer(serializers.ModelSerializer):
                 "Cashier max discount percentage must be between 0.00 and 100.00."
             )
         return value
+
+    def validate_tax_rate_pct(self, value):
+        if value < Decimal('0.00') or value > Decimal('100.00'):
+            raise serializers.ValidationError(
+                "Tax rate percentage must be between 0.00 and 100.00."
+            )
+        return value
+
+    def validate(self, attrs):
+        tax_mode = attrs.get('tax_mode', getattr(self.instance, 'tax_mode', 'NONE'))
+        tax_rate_pct = attrs.get(
+            'tax_rate_pct',
+            getattr(self.instance, 'tax_rate_pct', Decimal('0.00')),
+        )
+        if tax_mode in ('INCLUSIVE', 'EXCLUSIVE') and tax_rate_pct <= Decimal('0.00'):
+            raise serializers.ValidationError({
+                'tax_rate_pct': (
+                    f"A positive tax rate (> 0.00%) is required when tax_mode is {tax_mode}."
+                )
+            })
+        return attrs
 
 
 class ChangePasswordSerializer(serializers.Serializer):

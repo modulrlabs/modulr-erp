@@ -1,5 +1,5 @@
 import urllib.parse
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 from django.utils import timezone
@@ -8,6 +8,7 @@ from rest_framework.exceptions import PermissionDenied
 
 from core.audit import log_audit_event
 from core.mixins import validate_tenant_fk
+from core.models import ShopSettings, User
 from core.rbac import get_request_permissions
 from inventory.models import Product, StockMovement
 
@@ -213,8 +214,52 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
                     'line_total': line_total,
                 })
 
-            # Calculate Net Payable Total
-            total_amount = max(Decimal('0.00'), subtotal - discount)
+            # Validate discount range & enforce Cashier Discount Cap
+            if discount < Decimal('0.00') or discount > subtotal:
+                raise serializers.ValidationError({
+                    'discount': 'Discount must be between 0.00 and the invoice subtotal.'
+                })
+
+            shop_settings = ShopSettings.objects.filter(shop_id=shop.id).first()
+            if cashier.role == User.Role.CASHIER:
+                max_cap_pct = (
+                    shop_settings.cashier_max_discount_pct
+                    if shop_settings
+                    else Decimal('0.00')
+                )
+                max_allowed_discount = (
+                    subtotal * max_cap_pct / Decimal('100.00')
+                ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                if discount > max_allowed_discount:
+                    raise serializers.ValidationError({
+                        'discount': (
+                            f'Discount exceeds the maximum allowed cap of '
+                            f'{max_cap_pct}% (Rs. {max_allowed_discount}).'
+                        )
+                    })
+
+            # Authoritative Tax Calculation (NONE / EXCLUSIVE / INCLUSIVE)
+            taxable_base = subtotal - discount
+            tax_mode = shop_settings.tax_mode if shop_settings else 'NONE'
+            tax_rate_pct = shop_settings.tax_rate_pct if shop_settings else Decimal('0.00')
+            tax_label = shop_settings.tax_label if shop_settings else 'VAT'
+
+            if tax_mode == 'EXCLUSIVE':
+                tax_amount = (
+                    taxable_base * tax_rate_pct / Decimal('100.00')
+                ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                total_amount = taxable_base + tax_amount
+            elif tax_mode == 'INCLUSIVE':
+                total_amount = taxable_base
+                net_amount = taxable_base / (
+                    Decimal('1.00') + (tax_rate_pct / Decimal('100.00'))
+                )
+                tax_amount = (taxable_base - net_amount).quantize(
+                    Decimal('0.01'), rounding=ROUND_HALF_UP
+                )
+            else:
+                tax_amount = Decimal('0.00')
+                total_amount = taxable_base
 
             # If amount_paid wasn't specified for CASH/CARD, assume fully paid
             is_cash_or_card = payment_method in (Invoice.PaymentMethod.CASH, Invoice.PaymentMethod.CARD)
@@ -261,6 +306,10 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
                 cashier=cashier,
                 subtotal=subtotal,
                 discount=discount,
+                tax_mode=tax_mode,
+                tax_rate_pct=tax_rate_pct,
+                tax_label=tax_label,
+                tax_amount=tax_amount,
                 total_amount=total_amount,
                 payment_method=payment_method,
                 amount_paid=amount_paid,
@@ -411,6 +460,10 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'cashier_name',
             'subtotal',
             'discount',
+            'tax_mode',
+            'tax_rate_pct',
+            'tax_label',
+            'tax_amount',
             'total_amount',
             'payment_method',
             'amount_paid',

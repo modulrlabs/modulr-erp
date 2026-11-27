@@ -908,6 +908,7 @@ class DashboardSummaryView(APIView):
                     today_sales_total=Sum('total_amount'),
                     today_cash_collected=Sum('amount_paid'),
                     today_credit_issued=Sum('credit_amount'),
+                    today_tax_collected=Sum('tax_amount'),
                 )
             )
             thirty_day_fin = (
@@ -924,6 +925,7 @@ class DashboardSummaryView(APIView):
                 'today_sales_total': today_fin['today_sales_total'] or Decimal('0.00'),
                 'thirty_day_sales_total': thirty_day_fin['thirty_day_sales_total'] or Decimal('0.00'),
                 'today_cash_collected': today_fin['today_cash_collected'] or Decimal('0.00'),
+                'total_tax_collected': today_fin['today_tax_collected'] or Decimal('0.00'),
             }
 
             if shop.enable_credit_module:
