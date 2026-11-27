@@ -12,9 +12,9 @@ from rest_framework.response import Response
 
 from core.audit import log_audit_event
 from core.mixins import ShopScopedViewSetMixin
+from core.permissions import HasPermission
 
 from .models import Category, Product, StockMovement
-from .permissions import IsShopOwner, IsShopOwnerOrReadOnly
 from .serializers import (
     CategorySerializer,
     ProductCSVUploadSerializer,
@@ -25,25 +25,45 @@ from .serializers import (
 class CategoryViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing product categories.
-    - Read (GET): Allowed for both Cashiers and Owners.
-    - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    - Read (GET): Requires `inventory.view_products`.
+    - Write (POST, PUT, PATCH, DELETE): Requires `inventory.manage_products`.
     - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
-    permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    action_permissions = {
+        'list': 'inventory.view_products',
+        'retrieve': 'inventory.view_products',
+        'create': 'inventory.manage_products',
+        'update': 'inventory.manage_products',
+        'partial_update': 'inventory.manage_products',
+        'destroy': 'inventory.manage_products',
+    }
 
 
 class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing products, barcode lookups, and bulk CSV imports.
-    - Read (GET): Allowed for both Cashiers and Owners.
-    - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    - Read / by_barcode: Requires `inventory.view_products`.
+    - Create / Update / Delete: Requires `inventory.manage_products`.
+    - upload_csv: Requires `inventory.csv_import`.
     - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
     queryset = Product.objects.all().select_related('category')
     serializer_class = ProductSerializer
-    permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    action_permissions = {
+        'list': 'inventory.view_products',
+        'retrieve': 'inventory.view_products',
+        'by_barcode': 'inventory.view_products',
+        'create': 'inventory.manage_products',
+        'update': 'inventory.manage_products',
+        'partial_update': 'inventory.manage_products',
+        'destroy': 'inventory.manage_products',
+        'adjust_stock': 'inventory.adjust_stock',
+        'upload_csv': 'inventory.csv_import',
+    }
 
     def get_queryset(self):
         """
@@ -185,10 +205,73 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(
+        detail=True,
+        methods=['post'],
+        url_path='adjust-stock',
+        permission_classes=[permissions.IsAuthenticated, HasPermission],
+    )
+    def adjust_stock(self, request, public_id=None):
+        """
+        Dedicated stock adjustment endpoint (`POST /api/inventory/products/{public_id}/adjust-stock/`),
+        guarded by `inventory.adjust_stock`.
+        """
+        product = self.get_object()
+        raw_qty = request.data.get('stock_quantity')
+        if raw_qty is None:
+            return Response(
+                {"detail": "'stock_quantity' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            new_stock = Decimal(str(raw_qty))
+        except InvalidOperation:
+            return Response(
+                {"detail": "Invalid decimal format for 'stock_quantity'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if new_stock < Decimal('0.000'):
+            return Response(
+                {"detail": "Stock quantity cannot be negative."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        notes = str(request.data.get('notes', 'Manual stock adjustment'))[:255]
+        with transaction.atomic():
+            locked = Product.objects.select_for_update().get(id=product.id, shop=request.user.shop)
+            old_stock = locked.stock_quantity
+            if old_stock != new_stock:
+                locked.stock_quantity = new_stock
+                locked.save(update_fields=['stock_quantity', 'updated_at'])
+                StockMovement.objects.create(
+                    shop=request.user.shop,
+                    product=locked,
+                    movement_type=StockMovement.MovementType.ADJUSTMENT,
+                    quantity_change=new_stock - old_stock,
+                    balance_after=new_stock,
+                    reference_type='Product',
+                    reference_id=str(locked.public_id),
+                    notes=notes,
+                    performed_by=request.user,
+                )
+                log_audit_event(
+                    action='PRODUCT_STOCK_CHANGED',
+                    target_model='Product',
+                    target_id=str(locked.public_id),
+                    shop=request.user.shop,
+                    actor=request.user,
+                    before_state={'stock_quantity': old_stock},
+                    after_state={'stock_quantity': new_stock},
+                )
+
+        return Response(self.get_serializer(locked).data, status=status.HTTP_200_OK)
+
+    @action(
         detail=False,
         methods=['post'],
         url_path='upload-csv',
-        permission_classes=[permissions.IsAuthenticated, IsShopOwner],
+        permission_classes=[permissions.IsAuthenticated, HasPermission],
         parser_classes=[MultiPartParser, FormParser]
     )
     def upload_csv(self, request):

@@ -1,9 +1,13 @@
+from decimal import Decimal
+
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import AuditLog, Shop, User
+from .models import AuditLog, Shop, ShopSettings, User
+from .rbac import ACTIVE_PERMISSIONS, get_effective_permissions
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -55,21 +59,133 @@ class UserMeSerializer(serializers.ModelSerializer):
     Used by the GET /api/auth/me/ endpoint.
     """
     shop = ShopSerializer(read_only=True)
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
             'id',
+            'public_id',
             'username',
             'email',
             'first_name',
             'last_name',
             'role',
+            'must_change_password',
             'is_owner',
             'is_cashier',
             'shop',
+            'permissions',
         )
-        read_only_fields = ('id', 'role', 'is_owner', 'is_cashier', 'shop')
+        read_only_fields = (
+            'id',
+            'public_id',
+            'role',
+            'must_change_password',
+            'is_owner',
+            'is_cashier',
+            'shop',
+            'permissions',
+        )
+
+    @extend_schema_field(
+        serializers.ListField(
+            child=serializers.ChoiceField(choices=sorted(ACTIVE_PERMISSIONS))
+        )
+    )
+    def get_permissions(self, obj) -> list[str]:
+        return sorted(get_effective_permissions(obj))
+
+
+class ShopSettingsSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Owner-managed RBAC delegation toggles and cashier discount cap.
+    """
+    class Meta:
+        model = ShopSettings
+        fields = (
+            'managers_can_edit_products',
+            'managers_can_view_cost_price',
+            'managers_can_view_profit',
+            'managers_can_manage_purchasing',
+            'managers_can_manage_cashiers',
+            'cashier_max_discount_pct',
+        )
+
+    def validate_cashier_max_discount_pct(self, value):
+        if value < Decimal('0.00') or value > Decimal('100.00'):
+            raise serializers.ValidationError(
+                "Cashier max discount percentage must be between 0.00 and 100.00."
+            )
+        return value
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """
+    Validates current_password and new_password for POST /api/auth/change-password/.
+    """
+    current_password = serializers.CharField(write_only=True, required=True)
+    new_password = serializers.CharField(write_only=True, required=True, min_length=8)
+
+    def validate_current_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value
+
+    def validate_new_password(self, value):
+        user = self.context['request'].user
+        validate_password(value, user=user)
+        return value
+
+
+class StaffSerializer(serializers.ModelSerializer):
+    """
+    Read serializer for shop staff accounts exposed at /api/staff/.
+    """
+    class Meta:
+        model = User
+        fields = (
+            'id',
+            'public_id',
+            'username',
+            'email',
+            'first_name',
+            'last_name',
+            'role',
+            'is_active',
+            'must_change_password',
+            'date_joined',
+        )
+        read_only_fields = fields
+
+
+class StaffCreateSerializer(serializers.Serializer):
+    """
+    Input serializer for POST /api/staff/.
+    Username and temporary password are generated server-side.
+    """
+    first_name = serializers.CharField(max_length=150, required=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True, default='')
+    email = serializers.EmailField(required=False, allow_blank=True, default='')
+    role = serializers.ChoiceField(choices=User.Role.choices, default=User.Role.CASHIER)
+
+
+class StaffUpdateSerializer(serializers.ModelSerializer):
+    """
+    Input serializer for PATCH /api/staff/{public_id}/.
+    `username` is strictly read-only and cannot be changed.
+    """
+    class Meta:
+        model = User
+        fields = (
+            'username',
+            'first_name',
+            'last_name',
+            'email',
+            'role',
+        )
+        read_only_fields = ('username',)
 
 
 class ShopRegisterSerializer(serializers.Serializer):
@@ -234,12 +350,15 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Inject user and tenant details into the response payload
         data['user'] = {
             'id': user.id,
+            'public_id': str(user.public_id),
             'username': user.username,
             'email': user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
             'role': user.role,
         }
+        data['must_change_password'] = user.must_change_password
+        data['permissions'] = sorted(get_effective_permissions(user))
 
         if user.shop:
             data['shop'] = {
@@ -257,3 +376,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             data['shop'] = None
 
         return data
+
+
+class LoginResponseSerializer(serializers.Serializer):
+    """
+    OpenAPI schema serializer for POST /api/auth/login/ exposing typed permission enum.
+    """
+    access = serializers.CharField()
+    refresh = serializers.CharField(required=False)
+    user = serializers.DictField()
+    shop = serializers.DictField(allow_null=True)
+    must_change_password = serializers.BooleanField()
+    permissions = serializers.ListField(
+        child=serializers.ChoiceField(choices=sorted(ACTIVE_PERMISSIONS))
+    )

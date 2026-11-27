@@ -635,7 +635,8 @@ class SalesReturnAndDashboardAccuracyTests(APITestCase):
         self.assertEqual(self.product_a.stock_quantity, Decimal('16.000'))
         self.assertEqual(self.customer.total_credit_balance, Decimal('3600.00'))
 
-        # Return 1 unit of Rice
+        # Return 1 unit of Rice (requires sales.return_invoice: OWNER or MANAGER)
+        self.client.force_authenticate(user=self.owner)
         return_payload = {
             "reason": "Bag had small tear",
             "items": [
@@ -692,7 +693,8 @@ class SalesReturnAndDashboardAccuracyTests(APITestCase):
         invoice_pub_id = res.data['public_id']
         invoice_item_id = res.data['items'][0]['id']
 
-        # Attempt to return 3 units (only 2 purchased!)
+        # Attempt to return 3 units (only 2 purchased!) as OWNER
+        self.client.force_authenticate(user=self.owner)
         bad_return = {
             "reason": "Exceeding return",
             "items": [{"invoice_item_id": invoice_item_id, "quantity": "3.000"}]

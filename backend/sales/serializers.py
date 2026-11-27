@@ -4,9 +4,11 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 
 from core.audit import log_audit_event
 from core.mixins import validate_tenant_fk
+from core.rbac import get_request_permissions
 from inventory.models import Product, StockMovement
 
 from .models import (
@@ -68,7 +70,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
         """
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and not getattr(request.user, 'is_owner', False):
+        if request and 'inventory.view_cost_price' not in get_request_permissions(request):
             self.fields.pop('cost_price_at_sale', None)
 
 
@@ -151,6 +153,8 @@ class InvoiceCheckoutSerializer(serializers.Serializer):
         customer = validated_data.get('customer')
         payment_method = validated_data.get('payment_method')
         discount = validated_data.get('discount', Decimal('0.00'))
+        if discount > Decimal('0.00') and 'sales.apply_discount' not in get_request_permissions(request):
+            raise PermissionDenied("You do not have permission to apply invoice discounts.")
         amount_paid = validated_data.get('amount_paid', Decimal('0.00'))
         notes = validated_data.get('notes', '')
         idempotency_key = validated_data.get('idempotency_key')
@@ -348,7 +352,7 @@ class SalesReturnItemSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and not getattr(request.user, 'is_owner', False):
+        if request and 'inventory.view_cost_price' not in get_request_permissions(request):
             self.fields.pop('cost_price_at_sale', None)
 
 

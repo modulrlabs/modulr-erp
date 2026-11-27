@@ -1,8 +1,19 @@
 from django.contrib.auth.signals import user_login_failed
+from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from .audit import get_client_ip, log_audit_event
-from .models import User
+from .models import Shop, ShopSettings, User
+
+
+@receiver(post_save, sender=Shop)
+def ensure_shop_settings_created(sender, instance, created, **kwargs):
+    """
+    Auto-provision default ShopSettings whenever a new Shop is created.
+    Uses shop_id to avoid populating stale fields_cache on `instance`.
+    """
+    if created:
+        ShopSettings.objects.get_or_create(shop_id=instance.id)
 
 
 @receiver(user_login_failed)

@@ -1,7 +1,52 @@
 from urllib.parse import urlparse
 
 from django.conf import settings
-from rest_framework.exceptions import PermissionDenied
+from django.contrib.auth import get_user_model
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken
+from rest_framework_simplejwt.settings import api_settings
+
+from .rbac import get_effective_permissions
+
+
+class ShopJWTAuthentication(JWTAuthentication):
+    """
+    DB-backed JWT Authentication that validates live user & tenant state on every request
+    and resolves effective RBAC v2 permissions once per request.
+    """
+
+    def get_user(self, validated_token):
+        User = get_user_model()
+        try:
+            user_id = validated_token[api_settings.USER_ID_CLAIM]
+        except KeyError as exc:
+            raise InvalidToken("Token contained no recognizable user identification") from exc
+
+        try:
+            user = User.objects.select_related('shop__settings').get(
+                **{api_settings.USER_ID_FIELD: user_id}
+            )
+        except User.DoesNotExist as exc:
+            raise AuthenticationFailed("User not found", code="user_not_found") from exc
+
+        if not user.is_active:
+            raise AuthenticationFailed("User is inactive", code="user_inactive")
+
+        if user.shop is None or not user.shop.is_active:
+            raise AuthenticationFailed(
+                "Active shop membership required",
+                code="shop_inactive",
+            )
+
+        return user
+
+    def authenticate(self, request):
+        result = super().authenticate(request)
+        if result is not None:
+            user, _validated_token = result
+            request._effective_permissions = get_effective_permissions(user)
+        return result
 
 
 def _normalize_origin(url: str) -> str:

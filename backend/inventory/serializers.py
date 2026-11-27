@@ -3,6 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from core.mixins import validate_tenant_fk
+from core.rbac import get_request_permissions
 
 from .models import Category, Product
 
@@ -101,8 +102,8 @@ class ProductSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
 
-        # If user is not an Owner (e.g. Cashier), strip cost_price field completely
-        if request and hasattr(request, 'user') and not getattr(request.user, 'is_owner', False):
+        # Strip cost_price completely if user lacks inventory.view_cost_price
+        if request and 'inventory.view_cost_price' not in get_request_permissions(request):
             self.fields.pop('cost_price', None)
 
     def validate_category(self, value):

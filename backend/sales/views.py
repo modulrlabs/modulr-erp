@@ -13,6 +13,8 @@ from rest_framework.views import APIView
 
 from core.audit import log_audit_event
 from core.mixins import ShopScopedViewSetMixin
+from core.permissions import EnforcePasswordChange, HasPermission
+from core.rbac import get_request_permissions
 from inventory.models import Product, StockMovement
 
 from .models import (
@@ -24,7 +26,7 @@ from .models import (
     SalesReturn,
     SalesReturnItem,
 )
-from .permissions import IsCreditModuleEnabled, IsShopOwner
+from .permissions import IsCreditModuleEnabled
 from .serializers import (
     CreditPaymentSerializer,
     CustomerSerializer,
@@ -40,11 +42,19 @@ from .serializers import (
 class CustomerViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing customers and their credit accounts.
-    Guarded by 'enable_credit_module' and scoped to active shop tenant.
+    Guarded by 'enable_credit_module', RBAC v2 permissions, and scoped to active shop tenant.
     """
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
+    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled, HasPermission]
+    action_permissions = {
+        'list': ('credit.view_customers', 'credit.lookup_customers'),
+        'retrieve': ('credit.view_customers', 'credit.lookup_customers'),
+        'create': 'credit.manage_customers',
+        'update': 'credit.manage_customers',
+        'partial_update': 'credit.manage_customers',
+        'destroy': 'credit.manage_customers',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -79,10 +89,25 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         .select_related('customer', 'cashier')
         .prefetch_related('items__product', 'returns__items__product')
     )
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    action_permissions = {
+        'create': 'sales.pos_checkout',
+        'list': ('sales.view_all_invoices', 'sales.view_own_invoices'),
+        'retrieve': ('sales.view_all_invoices', 'sales.view_own_invoices'),
+        'void': 'sales.void_invoice',
+        'return_goods': 'sales.return_invoice',
+        'destroy': 'sales.void_invoice',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        perms = get_request_permissions(self.request)
+        if 'sales.view_all_invoices' not in perms:
+            if 'sales.view_own_invoices' in perms:
+                queryset = queryset.filter(cashier=self.request.user)
+            else:
+                return queryset.none()
 
         # Filter by status
         status_param = self.request.query_params.get('status')
@@ -172,7 +197,7 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         detail=True,
         methods=['post'],
         url_path='void',
-        permission_classes=[permissions.IsAuthenticated, IsShopOwner]
+        permission_classes=[permissions.IsAuthenticated, HasPermission]
     )
     def void(self, request, public_id=None):
         """
@@ -275,7 +300,7 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         detail=True,
         methods=['post'],
         url_path='return',
-        permission_classes=[permissions.IsAuthenticated]
+        permission_classes=[permissions.IsAuthenticated, HasPermission]
     )
     def return_goods(self, request, public_id=None):
         """
@@ -477,11 +502,19 @@ class InvoiceViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
 class CreditPaymentViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for settling customer credit accounts.
-    Guarded by 'enable_credit_module' and scoped to active shop tenant.
+    Guarded by 'enable_credit_module', RBAC v2 permissions, and scoped to active shop tenant.
     """
     queryset = CreditPayment.objects.all().select_related('customer', 'received_by')
     serializer_class = CreditPaymentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
+    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled, HasPermission]
+    action_permissions = {
+        'list': 'credit.view_ledger',
+        'retrieve': 'credit.view_ledger',
+        'create': 'credit.record_payment',
+        'update': 'credit.record_payment',
+        'partial_update': 'credit.record_payment',
+        'destroy': 'credit.record_payment',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -496,11 +529,20 @@ class CreditPaymentViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
 class PDChequeViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing Post-Dated Cheques.
-    Guarded by 'enable_credit_module' and scoped to active shop tenant.
+    Guarded by 'enable_credit_module', RBAC v2 permissions, and scoped to active shop tenant.
     """
     queryset = PDCheque.objects.all().select_related('customer')
     serializer_class = PDChequeSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled]
+    permission_classes = [permissions.IsAuthenticated, IsCreditModuleEnabled, HasPermission]
+    action_permissions = {
+        'list': 'cheques.view',
+        'retrieve': 'cheques.view',
+        'upcoming': 'cheques.view',
+        'create': 'cheques.manage',
+        'update': 'cheques.manage',
+        'partial_update': 'cheques.manage',
+        'destroy': 'cheques.manage',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -564,7 +606,8 @@ class DashboardAnalyticsView(APIView):
     - Subtracts returned merchandise revenue and profit from total_sales and gross_profit,
       reflecting true net profits.
     """
-    permission_classes = [permissions.IsAuthenticated, IsShopOwner]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    required_permission = 'dashboard.view_owner'
 
     @extend_schema(
         summary="Owner Business Dashboard Analytics",
@@ -686,21 +729,243 @@ class DashboardAnalyticsView(APIView):
             .order_by('-units_sold')[:5]
         )
 
+        kpis = {
+            "total_sales": total_sales,
+            "cash_collected": cash_collected,
+            "credit_issued": credit_issued,
+            "invoice_count": invoice_count,
+            "total_outstanding_credit": total_outstanding_credit,
+            "low_stock_count": low_stock_count,
+            "upcoming_cheques_count": upcoming_cheques_count,
+        }
+        if 'dashboard.view_profit' in get_request_permissions(request):
+            kpis["gross_profit"] = gross_profit
+
         return Response({
             "period": {
                 "days": days,
                 "start_date": str(start_date),
                 "end_date": str(today),
             },
-            "kpis": {
-                "total_sales": total_sales,
-                "gross_profit": gross_profit,
-                "cash_collected": cash_collected,
-                "credit_issued": credit_issued,
-                "invoice_count": invoice_count,
-                "total_outstanding_credit": total_outstanding_credit,
-                "low_stock_count": low_stock_count,
-                "upcoming_cheques_count": upcoming_cheques_count,
-            },
+            "kpis": kpis,
             "top_selling_products": list(top_selling),
         }, status=status.HTTP_200_OK)
+
+
+class DashboardSummaryView(APIView):
+    """
+    Role-specific dashboard summary endpoint: GET /api/dashboard/summary/
+
+    Returns ONLY the sections permitted by `request._effective_permissions`.
+    Forbidden sections are completely absent from the JSON response.
+    """
+    permission_classes = [permissions.IsAuthenticated, EnforcePasswordChange]
+
+    @staticmethod
+    def _net_profit_for_range(shop, start_date, end_date) -> Decimal:
+        invoices = Invoice.objects.filter(
+            shop=shop,
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date,
+        ).exclude(status=Invoice.Status.VOIDED)
+
+        gross_raw = InvoiceItem.objects.filter(
+            shop=shop,
+            invoice__in=invoices,
+        ).aggregate(
+            profit=Sum(
+                (F('unit_price') - F('cost_price_at_sale')) * F('quantity'),
+                output_field=models.DecimalField(max_digits=14, decimal_places=2),
+            )
+        )['profit'] or Decimal('0.00')
+
+        returns = SalesReturn.objects.filter(
+            shop=shop,
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date,
+        )
+        returned_profit = SalesReturnItem.objects.filter(
+            shop=shop,
+            sales_return__in=returns,
+        ).aggregate(
+            profit=Sum(
+                (F('unit_price') - F('cost_price_at_sale')) * F('quantity'),
+                output_field=models.DecimalField(max_digits=14, decimal_places=2),
+            )
+        )['profit'] or Decimal('0.00')
+
+        return gross_raw - returned_profit
+
+    @extend_schema(
+        summary="Role-Specific Dashboard Summary",
+        description=(
+            "Returns dashboard sections tailored to the authenticated user's live RBAC v2 "
+            "permissions (`operational`, `profit`, `cashier`, `inventory`, `finance`). "
+            "Sections the user lacks permission for are omitted from the response."
+        ),
+        responses={200: dict},
+    )
+    def get(self, request, *args, **kwargs):
+        user = getattr(request, 'user', None)
+        shop = getattr(user, 'shop', None)
+        if not shop or not shop.is_active:
+            raise PermissionDenied("Active shop membership required.")
+
+        perms = get_request_permissions(request)
+        today = timezone.now().date()
+        thirty_days_ago = today - timedelta(days=29)
+
+        payload = {}
+
+        # 1. Operational Section
+        if 'dashboard.view_operational' in perms or 'dashboard.view_owner' in perms:
+            today_invoices = Invoice.objects.filter(
+                shop=shop,
+                created_at__date=today,
+            ).exclude(status=Invoice.Status.VOIDED)
+
+            op_agg = today_invoices.aggregate(
+                total_sales=Sum('total_amount'),
+                invoice_count=Count('id'),
+            )
+            sales_per_cashier = list(
+                today_invoices.values('cashier__username')
+                .annotate(
+                    invoice_count=Count('id'),
+                    total_sales=Sum('total_amount'),
+                )
+                .order_by('-total_sales')
+            )
+            low_stock_count = Product.objects.filter(
+                shop=shop,
+                stock_quantity__lte=F('reorder_level'),
+            ).count()
+            today_voided_count = Invoice.objects.filter(
+                shop=shop,
+                created_at__date=today,
+                status=Invoice.Status.VOIDED,
+            ).count()
+            today_discounted_count = today_invoices.filter(discount__gt=Decimal('0.00')).count()
+
+            payload['operational'] = {
+                'today_sales_total': op_agg['total_sales'] or Decimal('0.00'),
+                'today_invoice_count': op_agg['invoice_count'] or 0,
+                'sales_per_cashier_today': sales_per_cashier,
+                'low_stock_count': low_stock_count,
+                'today_voided_count': today_voided_count,
+                'today_discounted_count': today_discounted_count,
+            }
+
+        # 2. Profit Section
+        if 'dashboard.view_profit' in perms or 'dashboard.view_owner' in perms:
+            payload['profit'] = {
+                'today_gross_profit': self._net_profit_for_range(shop, today, today),
+                'thirty_day_gross_profit': self._net_profit_for_range(shop, thirty_days_ago, today),
+            }
+
+        # 3. Cashier Personal Section (zero profit or cost data)
+        if 'dashboard.view_cashier' in perms:
+            my_agg = (
+                Invoice.objects.filter(
+                    shop=shop,
+                    cashier=user,
+                    created_at__date=today,
+                )
+                .exclude(status=Invoice.Status.VOIDED)
+                .aggregate(
+                    my_sales_today_count=Count('id'),
+                    my_sales_today_total=Sum('total_amount'),
+                )
+            )
+            payload['cashier'] = {
+                'my_sales_today_count': my_agg['my_sales_today_count'] or 0,
+                'my_sales_today_total': my_agg['my_sales_today_total'] or Decimal('0.00'),
+            }
+
+        # 4. Inventory Section
+        if 'dashboard.view_inventory' in perms or 'dashboard.view_owner' in perms:
+            low_stock_qs = Product.objects.filter(
+                shop=shop,
+                stock_quantity__lte=F('reorder_level'),
+            ).order_by('stock_quantity')
+            low_stock_items = list(
+                low_stock_qs.values('public_id', 'name', 'stock_quantity', 'reorder_level')[:10]
+            )
+            recent_movements = list(
+                StockMovement.objects.filter(shop=shop)
+                .select_related('product')
+                .values(
+                    'public_id',
+                    'product__name',
+                    'movement_type',
+                    'quantity_change',
+                    'balance_after',
+                    'created_at',
+                )[:10]
+            )
+            thirty_day_invoices = Invoice.objects.filter(
+                shop=shop,
+                created_at__date__gte=thirty_days_ago,
+                created_at__date__lte=today,
+            ).exclude(status=Invoice.Status.VOIDED)
+            top_moving_items = list(
+                InvoiceItem.objects.filter(shop=shop, invoice__in=thirty_day_invoices)
+                .values('product__public_id', 'product__name')
+                .annotate(units_sold=Sum('quantity'))
+                .order_by('-units_sold')[:10]
+            )
+            payload['inventory'] = {
+                'low_stock_count': low_stock_qs.count(),
+                'low_stock_items': low_stock_items,
+                'recent_stock_movements': recent_movements,
+                'top_moving_items': top_moving_items,
+            }
+
+        # 5. Finance Section
+        if 'dashboard.view_finance' in perms or 'dashboard.view_owner' in perms:
+            today_fin = (
+                Invoice.objects.filter(shop=shop, created_at__date=today)
+                .exclude(status=Invoice.Status.VOIDED)
+                .aggregate(
+                    today_sales_total=Sum('total_amount'),
+                    today_cash_collected=Sum('amount_paid'),
+                    today_credit_issued=Sum('credit_amount'),
+                )
+            )
+            thirty_day_fin = (
+                Invoice.objects.filter(
+                    shop=shop,
+                    created_at__date__gte=thirty_days_ago,
+                    created_at__date__lte=today,
+                )
+                .exclude(status=Invoice.Status.VOIDED)
+                .aggregate(thirty_day_sales_total=Sum('total_amount'))
+            )
+
+            finance_data = {
+                'today_sales_total': today_fin['today_sales_total'] or Decimal('0.00'),
+                'thirty_day_sales_total': thirty_day_fin['thirty_day_sales_total'] or Decimal('0.00'),
+                'today_cash_collected': today_fin['today_cash_collected'] or Decimal('0.00'),
+            }
+
+            if shop.enable_credit_module:
+                next_7_days = today + timedelta(days=7)
+                outstanding_credit = (
+                    Customer.objects.filter(shop=shop).aggregate(
+                        total=Sum('total_credit_balance')
+                    )['total']
+                    or Decimal('0.00')
+                )
+                upcoming_cheques = PDCheque.objects.filter(
+                    shop=shop,
+                    status=PDCheque.Status.PENDING,
+                    due_date__gte=today,
+                    due_date__lte=next_7_days,
+                ).count()
+                finance_data['today_credit_issued'] = today_fin['today_credit_issued'] or Decimal('0.00')
+                finance_data['outstanding_credit_total'] = outstanding_credit
+                finance_data['upcoming_cheques_7d_count'] = upcoming_cheques
+
+            payload['finance'] = finance_data
+
+        return Response(payload, status=status.HTTP_200_OK)
