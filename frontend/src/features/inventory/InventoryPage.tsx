@@ -3,6 +3,8 @@ import axios from 'axios';
 import {
   AlertCircle,
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
   FolderPlus,
   Package,
   Plus,
@@ -12,19 +14,30 @@ import {
   Tag,
   X,
 } from 'lucide-react';
-import { apiClient } from '../../api/client';
-import { useAuthStore } from '../../stores/authStore';
+import {
+  createCategory,
+  createProduct,
+  getCategories,
+  getProducts,
+  type CreateProductPayload,
+} from '../../api/inventory';
+import { usePermission } from '../../hooks/usePermission';
+import { formatLKR, formatMoneyFixed, formatQuantityFixed } from '../../lib/money';
 import type { Category, Product } from '../../types/erp';
 
 export const InventoryPage: React.FC = () => {
-  const { user } = useAuthStore();
-  const isOwner = user?.role === 'OWNER';
+  const canManageProducts = usePermission('inventory.manage_products');
+  const canViewCostPrice = usePermission('inventory.view_cost_price');
 
   // ---------------------------------------------------------------------------
-  // Data State
+  // Data & Pagination State
   // ---------------------------------------------------------------------------
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [page, setPage] = useState<number>(1);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [hasNext, setHasNext] = useState<boolean>(false);
+  const [hasPrevious, setHasPrevious] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,24 +80,28 @@ export const InventoryPage: React.FC = () => {
       setIsLoading(true);
       setError(null);
 
-      const params = new URLSearchParams();
-      if (search.trim()) params.append('search', search.trim());
-      if (selectedCategory) params.append('category', selectedCategory);
-      if (lowStockOnly) params.append('low_stock', 'true');
+      const data = await getProducts({
+        page,
+        search: search.trim() || undefined,
+        category: selectedCategory || undefined,
+        low_stock: lowStockOnly ? true : undefined,
+      });
 
-      const res = await apiClient.get<Product[]>(`/inventory/products/?${params.toString()}`);
-      setProducts(res.data);
+      setProducts(data.results);
+      setTotalCount(data.count);
+      setHasNext(Boolean(data.next));
+      setHasPrevious(Boolean(data.previous));
     } catch {
       setError('Failed to fetch inventory items. Please check connection.');
     } finally {
       setIsLoading(false);
     }
-  }, [search, selectedCategory, lowStockOnly]);
+  }, [page, search, selectedCategory, lowStockOnly]);
 
   const fetchCategories = useCallback(async () => {
     try {
-      const res = await apiClient.get<Category[]>('/inventory/categories/');
-      setCategories(res.data);
+      const data = await getCategories(100);
+      setCategories(data.results);
     } catch {
       // Ignore category fetch error silently
     }
@@ -116,22 +133,22 @@ export const InventoryPage: React.FC = () => {
       return;
     }
 
-    const payload: Record<string, unknown> = {
+    const payload: CreateProductPayload = {
       name: newProduct.name.trim(),
       barcode: newProduct.barcode.trim() || null,
-      category: newProduct.category ? parseInt(newProduct.category) : null,
-      selling_price: parseFloat(newProduct.selling_price).toFixed(2),
-      stock_quantity: (parseFloat(newProduct.stock_quantity) || 0).toFixed(3),
-      reorder_level: (parseFloat(newProduct.reorder_level) || 5).toFixed(3),
+      category: newProduct.category ? parseInt(newProduct.category, 10) : null,
+      selling_price: formatMoneyFixed(newProduct.selling_price),
+      stock_quantity: formatQuantityFixed(newProduct.stock_quantity || '0'),
+      reorder_level: formatQuantityFixed(newProduct.reorder_level || '5'),
     };
 
-    if (isOwner) {
-      payload.cost_price = parseFloat(newProduct.cost_price || '0').toFixed(2);
+    if (canViewCostPrice) {
+      payload.cost_price = formatMoneyFixed(newProduct.cost_price || '0');
     }
 
     try {
       setIsSubmitting(true);
-      await apiClient.post('/inventory/products/', payload);
+      await createProduct(payload);
       setIsAddModalOpen(false);
       setNewProduct({
         name: '',
@@ -172,11 +189,11 @@ export const InventoryPage: React.FC = () => {
     }
 
     try {
-      const res = await apiClient.post<Category>('/inventory/categories/', {
+      const created = await createCategory({
         name: newCategoryName.trim(),
       });
-      setCategories((prev) => [...prev, res.data]);
-      setNewProduct((prev) => ({ ...prev, category: res.data.id.toString() }));
+      setCategories((prev) => [...prev, created]);
+      setNewProduct((prev) => ({ ...prev, category: created.id.toString() }));
       setNewCategoryName('');
       setIsCreatingCategory(false);
     } catch (err: unknown) {
@@ -202,7 +219,7 @@ export const InventoryPage: React.FC = () => {
           </p>
         </div>
 
-        {isOwner && (
+        {canManageProducts && (
           <button
             onClick={() => setIsAddModalOpen(true)}
             className="flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition-colors cursor-pointer shrink-0"
@@ -223,7 +240,10 @@ export const InventoryPage: React.FC = () => {
           <input
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
             placeholder="Search by product name or barcode..."
             className="block w-full rounded-lg border border-slate-300 pl-10 pr-4 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600"
           />
@@ -233,7 +253,10 @@ export const InventoryPage: React.FC = () => {
         <div className="sm:w-56">
           <select
             value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
+            onChange={(e) => {
+              setSelectedCategory(e.target.value);
+              setPage(1);
+            }}
             className="block w-full rounded-lg border border-slate-300 py-2 px-3 text-xs text-slate-700 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600 bg-white"
           >
             <option value="">All Categories</option>
@@ -248,7 +271,10 @@ export const InventoryPage: React.FC = () => {
         {/* Low Stock Toggle Button */}
         <button
           type="button"
-          onClick={() => setLowStockOnly((prev) => !prev)}
+          onClick={() => {
+            setLowStockOnly((prev) => !prev);
+            setPage(1);
+          }}
           className={`flex items-center justify-center gap-1.5 rounded-lg border py-2 px-3.5 text-xs font-semibold transition-colors shrink-0 ${
             lowStockOnly
               ? 'border-amber-400 bg-amber-50 text-amber-800'
@@ -287,9 +313,9 @@ export const InventoryPage: React.FC = () => {
                 <th className="py-3 pl-4 pr-3">Product Name</th>
                 <th className="py-3 px-3">Category</th>
                 <th className="py-3 px-3">Barcode</th>
-                {isOwner && (
+                {canViewCostPrice && (
                   <th className="py-3 px-3 text-right">
-                    <span className="inline-flex items-center gap-1 text-purple-700" title="Visible only to Shop Owners">
+                    <span className="inline-flex items-center gap-1 text-purple-700" title="Restricted by inventory.view_cost_price permission">
                       <Shield className="h-3 w-3" /> Cost Price
                     </span>
                   </th>
@@ -303,7 +329,7 @@ export const InventoryPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 font-medium">
               {isLoading && products.length === 0 ? (
                 <tr>
-                  <td colSpan={isOwner ? 7 : 6} className="py-12 text-center text-slate-400">
+                  <td colSpan={canViewCostPrice ? 7 : 6} className="py-12 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
                       <span>Loading products...</span>
@@ -312,7 +338,7 @@ export const InventoryPage: React.FC = () => {
                 </tr>
               ) : products.length === 0 ? (
                 <tr>
-                  <td colSpan={isOwner ? 7 : 6} className="py-12 text-center text-slate-400">
+                  <td colSpan={canViewCostPrice ? 7 : 6} className="py-12 text-center text-slate-400">
                     <Package className="h-8 w-8 mx-auto text-slate-300 stroke-[1.5]" />
                     <p className="mt-2 text-sm font-semibold text-slate-700">No products found</p>
                     <p className="text-xs text-slate-400">
@@ -339,13 +365,13 @@ export const InventoryPage: React.FC = () => {
                     <td className="py-3.5 px-3 font-mono text-[11px] text-slate-600">
                       {p.barcode || <span className="text-slate-300">—</span>}
                     </td>
-                    {isOwner && (
+                    {canViewCostPrice && (
                       <td className="py-3.5 px-3 text-right text-purple-700 font-semibold">
-                        LKR {parseFloat(p.cost_price || '0').toFixed(2)}
+                        {formatLKR(p.cost_price ?? '0')}
                       </td>
                     )}
                     <td className="py-3.5 px-3 text-right font-bold text-slate-900">
-                      LKR {parseFloat(p.selling_price).toFixed(2)}
+                      {formatLKR(p.selling_price)}
                     </td>
                     <td className="py-3.5 px-3 text-center">
                       <span className="font-bold text-slate-800">{p.stock_quantity}</span>
@@ -368,12 +394,40 @@ export const InventoryPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Footer */}
+        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-4 py-3 text-xs text-slate-600">
+          <span>
+            Showing <span className="font-semibold text-slate-800">{products.length}</span> of{' '}
+            <span className="font-semibold text-slate-800">{totalCount}</span> products (Page {page})
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={!hasPrevious || isLoading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              <span>Previous</span>
+            </button>
+            <button
+              type="button"
+              disabled={!hasNext || isLoading}
+              onClick={() => setPage((p) => p + 1)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span>Next</span>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* -------------------------------------------------------------------- */}
-      {/* ADD PRODUCT MODAL (Owner Only)                                       */}
+      {/* ADD PRODUCT MODAL                                                    */}
       {/* -------------------------------------------------------------------- */}
-      {isAddModalOpen && (
+      {isAddModalOpen && canManageProducts && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
           <div className="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto">
             <button
@@ -478,7 +532,7 @@ export const InventoryPage: React.FC = () => {
 
               {/* Pricing Section */}
               <div className="grid grid-cols-2 gap-3">
-                {isOwner && (
+                {canViewCostPrice && (
                   <div>
                     <label className="block text-slate-700 font-bold uppercase tracking-wider mb-1">
                       Cost Price (LKR)
@@ -495,7 +549,7 @@ export const InventoryPage: React.FC = () => {
                   </div>
                 )}
 
-                <div className={isOwner ? '' : 'col-span-2'}>
+                <div className={canViewCostPrice ? '' : 'col-span-2'}>
                   <label className="block text-slate-700 font-bold uppercase tracking-wider mb-1">
                     Selling Price (LKR) *
                   </label>

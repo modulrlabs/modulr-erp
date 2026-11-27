@@ -1,21 +1,43 @@
 import React, { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import axios from 'axios';
-import { apiClient } from './api/client';
-import { ProtectedRoute, PublicOnlyRoute } from './components/Guards';
+import { apiClient, syncAuthMe } from './api/client';
+import { PermissionGuard, ProtectedRoute, PublicOnlyRoute } from './components/Guards';
 import { Layout } from './components/Layout';
+import { ChangePasswordPage } from './features/auth/ChangePasswordPage';
+import { ForbiddenPage } from './features/auth/ForbiddenPage';
 import { LoginPage } from './features/auth/LoginPage';
 import { RegisterShopPage } from './features/auth/RegisterShopPage';
 import { InventoryPage } from './features/inventory/InventoryPage';
 import { PosCheckoutPage } from './features/pos/PosCheckoutPage';
-import { useAuthStore } from './stores/authStore';
-import type { ShopProfile, UserProfile } from './types/erp';
+import { getDefaultHomeRoute, useAuthStore } from './stores/authStore';
+import type { MeResponse, ShopProfile, UserProfile } from './types/erp';
+
+const AuthFocusSync: React.FC = () => {
+  const isAuthenticated = useAuthStore((s) => Boolean(s.accessToken && s.user));
+
+  useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: syncAuthMe,
+    enabled: isAuthenticated,
+    refetchOnWindowFocus: true,
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  return null;
+};
+
+const HomeRedirect: React.FC = () => {
+  const user = useAuthStore((s) => s.user);
+  return <Navigate to={getDefaultHomeRoute(user?.role)} replace />;
+};
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: true,
       retry: 1,
     },
   },
@@ -49,24 +71,7 @@ export const App: React.FC = () => {
         const newAccessToken = refreshResponse.data.access;
 
         // Fetch active user details and tenant profile
-        const meResponse = await apiClient.get<
-          UserProfile & {
-            shop: {
-              id: number;
-              public_id: string;
-              name: string;
-              address: string;
-              phone: string;
-              is_active?: boolean;
-              enable_credit_module?: boolean;
-              enable_whatsapp_alerts?: boolean;
-              features?: {
-                enable_credit_module: boolean;
-                enable_whatsapp_alerts: boolean;
-              };
-            } | null;
-          }
-        >('/auth/me/', {
+        const meResponse = await apiClient.get<MeResponse>('/auth/me/', {
           headers: {
             Authorization: `Bearer ${newAccessToken}`,
           },
@@ -92,14 +97,22 @@ export const App: React.FC = () => {
 
         const userProfile: UserProfile = {
           id: meData.id,
+          public_id: meData.public_id,
           username: meData.username,
           email: meData.email,
           first_name: meData.first_name,
           last_name: meData.last_name,
           role: meData.role,
+          must_change_password: meData.must_change_password,
         };
 
-        setAuth(userProfile, normalizedShop, newAccessToken);
+        setAuth(
+          userProfile,
+          normalizedShop,
+          newAccessToken,
+          meData.permissions ?? [],
+          Boolean(meData.must_change_password)
+        );
       } catch {
         // No active or valid cookie; user starts in unauthenticated state
         clearAuth();
@@ -124,9 +137,10 @@ export const App: React.FC = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <AuthFocusSync />
       <BrowserRouter>
         <Routes>
-          {/* Public Auth Routes (Redirects to /pos if already authenticated) */}
+          {/* Public Auth Routes */}
           <Route element={<PublicOnlyRoute />}>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterShopPage />} />
@@ -134,10 +148,16 @@ export const App: React.FC = () => {
 
           {/* Protected Application Routes */}
           <Route element={<ProtectedRoute />}>
+            <Route path="/change-password" element={<ChangePasswordPage />} />
+            <Route path="/forbidden" element={<ForbiddenPage />} />
             <Route element={<Layout />}>
-              <Route path="/pos" element={<PosCheckoutPage />} />
-              <Route path="/inventory" element={<InventoryPage />} />
-              <Route path="/" element={<Navigate to="/pos" replace />} />
+              <Route element={<PermissionGuard permission="sales.pos_checkout" />}>
+                <Route path="/pos" element={<PosCheckoutPage />} />
+              </Route>
+              <Route element={<PermissionGuard permission="inventory.view_products" />}>
+                <Route path="/inventory" element={<InventoryPage />} />
+              </Route>
+              <Route path="/" element={<HomeRedirect />} />
             </Route>
           </Route>
 
