@@ -16,6 +16,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from corsheaders.defaults import default_headers
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -258,6 +260,11 @@ AXES_RESET_ON_SUCCESS = True
 # ------------------------------------------------------------------------------
 # CORS & CSRF Configuration (Cross-Origin Resource Sharing)
 # ------------------------------------------------------------------------------
+CORS_ALLOW_HEADERS = [
+    *default_headers,
+    'idempotency-key',
+]
+
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 
