@@ -40,7 +40,7 @@ jobs:
         run: ruff check .
 
       - name: Static Security Scan (Bandit)
-        run: bandit -r . -x ./.venv,./venv,*/tests.py
+        run: bandit -r . -x "./.venv,./venv,*/tests*.py,*/test_*.py"
 
       - name: Dependency Vulnerability Audit (pip-audit)
         run: pip-audit -r requirements.txt
