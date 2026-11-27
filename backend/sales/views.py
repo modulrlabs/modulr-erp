@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 
 from core.audit import log_audit_event
 from core.mixins import ShopScopedViewSetMixin
-from core.permissions import HasPermission
+from core.permissions import EnforcePasswordChange, HasPermission
 from core.rbac import get_request_permissions
 from inventory.models import Product, StockMovement
 
@@ -750,3 +750,222 @@ class DashboardAnalyticsView(APIView):
             "kpis": kpis,
             "top_selling_products": list(top_selling),
         }, status=status.HTTP_200_OK)
+
+
+class DashboardSummaryView(APIView):
+    """
+    Role-specific dashboard summary endpoint: GET /api/dashboard/summary/
+
+    Returns ONLY the sections permitted by `request._effective_permissions`.
+    Forbidden sections are completely absent from the JSON response.
+    """
+    permission_classes = [permissions.IsAuthenticated, EnforcePasswordChange]
+
+    @staticmethod
+    def _net_profit_for_range(shop, start_date, end_date) -> Decimal:
+        invoices = Invoice.objects.filter(
+            shop=shop,
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date,
+        ).exclude(status=Invoice.Status.VOIDED)
+
+        gross_raw = InvoiceItem.objects.filter(
+            shop=shop,
+            invoice__in=invoices,
+        ).aggregate(
+            profit=Sum(
+                (F('unit_price') - F('cost_price_at_sale')) * F('quantity'),
+                output_field=models.DecimalField(max_digits=14, decimal_places=2),
+            )
+        )['profit'] or Decimal('0.00')
+
+        returns = SalesReturn.objects.filter(
+            shop=shop,
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date,
+        )
+        returned_profit = SalesReturnItem.objects.filter(
+            shop=shop,
+            sales_return__in=returns,
+        ).aggregate(
+            profit=Sum(
+                (F('unit_price') - F('cost_price_at_sale')) * F('quantity'),
+                output_field=models.DecimalField(max_digits=14, decimal_places=2),
+            )
+        )['profit'] or Decimal('0.00')
+
+        return gross_raw - returned_profit
+
+    @extend_schema(
+        summary="Role-Specific Dashboard Summary",
+        description=(
+            "Returns dashboard sections tailored to the authenticated user's live RBAC v2 "
+            "permissions (`operational`, `profit`, `cashier`, `inventory`, `finance`). "
+            "Sections the user lacks permission for are omitted from the response."
+        ),
+        responses={200: dict},
+    )
+    def get(self, request, *args, **kwargs):
+        user = getattr(request, 'user', None)
+        shop = getattr(user, 'shop', None)
+        if not shop or not shop.is_active:
+            raise PermissionDenied("Active shop membership required.")
+
+        perms = get_request_permissions(request)
+        today = timezone.now().date()
+        thirty_days_ago = today - timedelta(days=29)
+
+        payload = {}
+
+        # 1. Operational Section
+        if 'dashboard.view_operational' in perms or 'dashboard.view_owner' in perms:
+            today_invoices = Invoice.objects.filter(
+                shop=shop,
+                created_at__date=today,
+            ).exclude(status=Invoice.Status.VOIDED)
+
+            op_agg = today_invoices.aggregate(
+                total_sales=Sum('total_amount'),
+                invoice_count=Count('id'),
+            )
+            sales_per_cashier = list(
+                today_invoices.values('cashier__username')
+                .annotate(
+                    invoice_count=Count('id'),
+                    total_sales=Sum('total_amount'),
+                )
+                .order_by('-total_sales')
+            )
+            low_stock_count = Product.objects.filter(
+                shop=shop,
+                stock_quantity__lte=F('reorder_level'),
+            ).count()
+            today_voided_count = Invoice.objects.filter(
+                shop=shop,
+                created_at__date=today,
+                status=Invoice.Status.VOIDED,
+            ).count()
+            today_discounted_count = today_invoices.filter(discount__gt=Decimal('0.00')).count()
+
+            payload['operational'] = {
+                'today_sales_total': op_agg['total_sales'] or Decimal('0.00'),
+                'today_invoice_count': op_agg['invoice_count'] or 0,
+                'sales_per_cashier_today': sales_per_cashier,
+                'low_stock_count': low_stock_count,
+                'today_voided_count': today_voided_count,
+                'today_discounted_count': today_discounted_count,
+            }
+
+        # 2. Profit Section
+        if 'dashboard.view_profit' in perms or 'dashboard.view_owner' in perms:
+            payload['profit'] = {
+                'today_gross_profit': self._net_profit_for_range(shop, today, today),
+                'thirty_day_gross_profit': self._net_profit_for_range(shop, thirty_days_ago, today),
+            }
+
+        # 3. Cashier Personal Section (zero profit or cost data)
+        if 'dashboard.view_cashier' in perms:
+            my_agg = (
+                Invoice.objects.filter(
+                    shop=shop,
+                    cashier=user,
+                    created_at__date=today,
+                )
+                .exclude(status=Invoice.Status.VOIDED)
+                .aggregate(
+                    my_sales_today_count=Count('id'),
+                    my_sales_today_total=Sum('total_amount'),
+                )
+            )
+            payload['cashier'] = {
+                'my_sales_today_count': my_agg['my_sales_today_count'] or 0,
+                'my_sales_today_total': my_agg['my_sales_today_total'] or Decimal('0.00'),
+            }
+
+        # 4. Inventory Section
+        if 'dashboard.view_inventory' in perms or 'dashboard.view_owner' in perms:
+            low_stock_qs = Product.objects.filter(
+                shop=shop,
+                stock_quantity__lte=F('reorder_level'),
+            ).order_by('stock_quantity')
+            low_stock_items = list(
+                low_stock_qs.values('public_id', 'name', 'stock_quantity', 'reorder_level')[:10]
+            )
+            recent_movements = list(
+                StockMovement.objects.filter(shop=shop)
+                .select_related('product')
+                .values(
+                    'public_id',
+                    'product__name',
+                    'movement_type',
+                    'quantity_change',
+                    'balance_after',
+                    'created_at',
+                )[:10]
+            )
+            thirty_day_invoices = Invoice.objects.filter(
+                shop=shop,
+                created_at__date__gte=thirty_days_ago,
+                created_at__date__lte=today,
+            ).exclude(status=Invoice.Status.VOIDED)
+            top_moving_items = list(
+                InvoiceItem.objects.filter(shop=shop, invoice__in=thirty_day_invoices)
+                .values('product__public_id', 'product__name')
+                .annotate(units_sold=Sum('quantity'))
+                .order_by('-units_sold')[:10]
+            )
+            payload['inventory'] = {
+                'low_stock_count': low_stock_qs.count(),
+                'low_stock_items': low_stock_items,
+                'recent_stock_movements': recent_movements,
+                'top_moving_items': top_moving_items,
+            }
+
+        # 5. Finance Section
+        if 'dashboard.view_finance' in perms or 'dashboard.view_owner' in perms:
+            today_fin = (
+                Invoice.objects.filter(shop=shop, created_at__date=today)
+                .exclude(status=Invoice.Status.VOIDED)
+                .aggregate(
+                    today_sales_total=Sum('total_amount'),
+                    today_cash_collected=Sum('amount_paid'),
+                    today_credit_issued=Sum('credit_amount'),
+                )
+            )
+            thirty_day_fin = (
+                Invoice.objects.filter(
+                    shop=shop,
+                    created_at__date__gte=thirty_days_ago,
+                    created_at__date__lte=today,
+                )
+                .exclude(status=Invoice.Status.VOIDED)
+                .aggregate(thirty_day_sales_total=Sum('total_amount'))
+            )
+
+            finance_data = {
+                'today_sales_total': today_fin['today_sales_total'] or Decimal('0.00'),
+                'thirty_day_sales_total': thirty_day_fin['thirty_day_sales_total'] or Decimal('0.00'),
+                'today_cash_collected': today_fin['today_cash_collected'] or Decimal('0.00'),
+            }
+
+            if shop.enable_credit_module:
+                next_7_days = today + timedelta(days=7)
+                outstanding_credit = (
+                    Customer.objects.filter(shop=shop).aggregate(
+                        total=Sum('total_credit_balance')
+                    )['total']
+                    or Decimal('0.00')
+                )
+                upcoming_cheques = PDCheque.objects.filter(
+                    shop=shop,
+                    status=PDCheque.Status.PENDING,
+                    due_date__gte=today,
+                    due_date__lte=next_7_days,
+                ).count()
+                finance_data['today_credit_issued'] = today_fin['today_credit_issued'] or Decimal('0.00')
+                finance_data['outstanding_credit_total'] = outstanding_credit
+                finance_data['upcoming_cheques_7d_count'] = upcoming_cheques
+
+            payload['finance'] = finance_data
+
+        return Response(payload, status=status.HTTP_200_OK)

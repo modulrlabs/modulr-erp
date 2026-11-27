@@ -127,3 +127,14 @@ Every `Shop` automatically receives a `ShopSettings` record on creation via `pos
 | `managers_can_manage_purchasing` | `False` | `False` | Grants `purchasing.manage` (Phase 2) to `MANAGER` |
 | `managers_can_manage_cashiers` | `False` | `False` | Grants `staff.manage_cashiers_only` to `MANAGER` |
 | `cashier_max_discount_pct` | `0.00` | `100.00` | Maximum invoice discount % a `CASHIER` may apply |
+
+---
+
+## 5. Frontend Staleness & Permission Refresh Rule
+
+Because `ShopJWTAuthentication` evaluates `get_effective_permissions(user)` from the live database on every API request, role changes, deactivation, and `ShopSettings` toggles take effect **immediately** on the backend—even before a user's access token expires.
+
+To keep the frontend UI synchronized with live backend permissions:
+1. **Refetch on `403 Forbidden`:** Whenever any API call receives `403 Forbidden` (and it is not `password_change_required`), the frontend must refetch `GET /api/auth/me/` and update its in-memory `permissions` and `user` state.
+2. **Refetch on Window Focus:** Whenever the browser tab/window regains focus, the frontend must trigger a background refetch of `GET /api/auth/me/` so Owner-toggled `ShopSettings` or role updates are reflected immediately without requiring a logout/login.
+3. **OpenAPI Typed Enum:** Both `POST /api/auth/login/` and `GET /api/auth/me/` expose `permissions` as an OpenAPI `ChoiceField` enum of all `ACTIVE_PERMISSIONS`, enabling `openapi-typescript` to generate strict compile-time permission types.

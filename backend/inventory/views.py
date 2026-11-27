@@ -61,6 +61,7 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
         'update': 'inventory.manage_products',
         'partial_update': 'inventory.manage_products',
         'destroy': 'inventory.manage_products',
+        'adjust_stock': 'inventory.adjust_stock',
         'upload_csv': 'inventory.csv_import',
     }
 
@@ -202,6 +203,69 @@ class ProductViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
 
         serializer = self.get_serializer(product)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='adjust-stock',
+        permission_classes=[permissions.IsAuthenticated, HasPermission],
+    )
+    def adjust_stock(self, request, public_id=None):
+        """
+        Dedicated stock adjustment endpoint (`POST /api/inventory/products/{public_id}/adjust-stock/`),
+        guarded by `inventory.adjust_stock`.
+        """
+        product = self.get_object()
+        raw_qty = request.data.get('stock_quantity')
+        if raw_qty is None:
+            return Response(
+                {"detail": "'stock_quantity' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            new_stock = Decimal(str(raw_qty))
+        except InvalidOperation:
+            return Response(
+                {"detail": "Invalid decimal format for 'stock_quantity'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if new_stock < Decimal('0.000'):
+            return Response(
+                {"detail": "Stock quantity cannot be negative."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        notes = str(request.data.get('notes', 'Manual stock adjustment'))[:255]
+        with transaction.atomic():
+            locked = Product.objects.select_for_update().get(id=product.id, shop=request.user.shop)
+            old_stock = locked.stock_quantity
+            if old_stock != new_stock:
+                locked.stock_quantity = new_stock
+                locked.save(update_fields=['stock_quantity', 'updated_at'])
+                StockMovement.objects.create(
+                    shop=request.user.shop,
+                    product=locked,
+                    movement_type=StockMovement.MovementType.ADJUSTMENT,
+                    quantity_change=new_stock - old_stock,
+                    balance_after=new_stock,
+                    reference_type='Product',
+                    reference_id=str(locked.public_id),
+                    notes=notes,
+                    performed_by=request.user,
+                )
+                log_audit_event(
+                    action='PRODUCT_STOCK_CHANGED',
+                    target_model='Product',
+                    target_id=str(locked.public_id),
+                    shop=request.user.shop,
+                    actor=request.user,
+                    before_state={'stock_quantity': old_stock},
+                    after_state={'stock_quantity': new_stock},
+                )
+
+        return Response(self.get_serializer(locked).data, status=status.HTTP_200_OK)
 
     @action(
         detail=False,

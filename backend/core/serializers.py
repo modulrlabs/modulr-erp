@@ -1,10 +1,13 @@
+from decimal import Decimal
+
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import AuditLog, Shop, User
-from .rbac import get_effective_permissions
+from .models import AuditLog, Shop, ShopSettings, User
+from .rbac import ACTIVE_PERMISSIONS, get_effective_permissions
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -85,8 +88,36 @@ class UserMeSerializer(serializers.ModelSerializer):
             'permissions',
         )
 
+    @extend_schema_field(
+        serializers.ListField(
+            child=serializers.ChoiceField(choices=sorted(ACTIVE_PERMISSIONS))
+        )
+    )
     def get_permissions(self, obj) -> list[str]:
         return sorted(get_effective_permissions(obj))
+
+
+class ShopSettingsSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Owner-managed RBAC delegation toggles and cashier discount cap.
+    """
+    class Meta:
+        model = ShopSettings
+        fields = (
+            'managers_can_edit_products',
+            'managers_can_view_cost_price',
+            'managers_can_view_profit',
+            'managers_can_manage_purchasing',
+            'managers_can_manage_cashiers',
+            'cashier_max_discount_pct',
+        )
+
+    def validate_cashier_max_discount_pct(self, value):
+        if value < Decimal('0.00') or value > Decimal('100.00'):
+            raise serializers.ValidationError(
+                "Cashier max discount percentage must be between 0.00 and 100.00."
+            )
+        return value
 
 
 class ChangePasswordSerializer(serializers.Serializer):
@@ -345,3 +376,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             data['shop'] = None
 
         return data
+
+
+class LoginResponseSerializer(serializers.Serializer):
+    """
+    OpenAPI schema serializer for POST /api/auth/login/ exposing typed permission enum.
+    """
+    access = serializers.CharField()
+    refresh = serializers.CharField(required=False)
+    user = serializers.DictField()
+    shop = serializers.DictField(allow_null=True)
+    must_change_password = serializers.BooleanField()
+    permissions = serializers.ListField(
+        child=serializers.ChoiceField(choices=sorted(ACTIVE_PERMISSIONS))
+    )

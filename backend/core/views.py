@@ -2,7 +2,7 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from drf_spectacular.utils import extend_schema
-from rest_framework import permissions, status, viewsets
+from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -14,15 +14,17 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from .audit import log_audit_event
 from .authentication import clear_refresh_cookie, enforce_cookie_csrf, set_refresh_cookie
 from .mixins import ShopScopedViewSetMixin
-from .models import AuditLog, User
+from .models import AuditLog, ShopSettings, User
 from .permissions import HasPermission
 from .rbac import ROLE_HIERARCHY, get_request_permissions
 from .serializers import (
     AuditLogSerializer,
     ChangePasswordSerializer,
     CustomTokenObtainPairSerializer,
+    LoginResponseSerializer,
     ShopRegisterSerializer,
     ShopSerializer,
+    ShopSettingsSerializer,
     StaffCreateSerializer,
     StaffSerializer,
     StaffUpdateSerializer,
@@ -98,6 +100,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
     throttle_scope = 'login'
 
+    @extend_schema(responses={200: LoginResponseSerializer}, summary="Authenticate user and return JWT + permissions")
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
         if response.status_code == status.HTTP_200_OK:
@@ -586,4 +589,42 @@ class StaffViewSet(ShopScopedViewSetMixin, viewsets.ModelViewSet):
                 'must_change_password': target_user.must_change_password,
             },
             status=status.HTTP_200_OK,
+        )
+
+
+class ShopSettingsView(generics.RetrieveUpdateAPIView):
+    """
+    Owner-only endpoint for viewing and updating ShopSettings (`GET` & `PATCH /api/core/shop-settings/`).
+    """
+    serializer_class = ShopSettingsSerializer
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    required_permission = 'settings.manage_shop'
+    http_method_names = ['get', 'patch', 'head', 'options']
+
+    def get_object(self):
+        settings_obj, _ = ShopSettings.objects.get_or_create(shop_id=self.request.user.shop_id)
+        return settings_obj
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        tracked_fields = (
+            'managers_can_edit_products',
+            'managers_can_view_cost_price',
+            'managers_can_view_profit',
+            'managers_can_manage_purchasing',
+            'managers_can_manage_cashiers',
+            'cashier_max_discount_pct',
+        )
+        before_state = {field: getattr(instance, field) for field in tracked_fields}
+        updated = serializer.save()
+        after_state = {field: getattr(updated, field) for field in tracked_fields}
+
+        log_audit_event(
+            action='SHOP_SETTINGS_UPDATED',
+            target_model='ShopSettings',
+            target_id=str(self.request.user.shop.public_id),
+            shop=self.request.user.shop,
+            actor=self.request.user,
+            before_state=before_state,
+            after_state=after_state,
         )

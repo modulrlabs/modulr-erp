@@ -104,7 +104,7 @@ class HasPermission(permissions.BasePermission):
             log_audit_event(
                 action='PERMISSION_DENIED',
                 target_model=view.__class__.__name__,
-                target_id=request.path,
+                target_id=request.path[:64],
                 shop=getattr(user, 'shop', None),
                 actor=user,
                 after_state={

@@ -10,9 +10,10 @@ from .models import Shop, ShopSettings, User
 def ensure_shop_settings_created(sender, instance, created, **kwargs):
     """
     Auto-provision default ShopSettings whenever a new Shop is created.
+    Uses shop_id to avoid populating stale fields_cache on `instance`.
     """
     if created:
-        ShopSettings.objects.get_or_create(shop=instance)
+        ShopSettings.objects.get_or_create(shop_id=instance.id)
 
 
 @receiver(user_login_failed)
