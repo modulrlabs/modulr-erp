@@ -1,13 +1,44 @@
 import React from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LogOut, Package, ShoppingCart, Store, User, WifiOff } from 'lucide-react';
+import {
+  FileText,
+  LayoutDashboard,
+  LogOut,
+  Package,
+  ShoppingCart,
+  Store,
+  User,
+  WifiOff,
+  type LucideIcon,
+} from 'lucide-react';
 import { apiClient } from '../api/client';
 import { useIdleTimeout } from '../hooks/useIdleTimeout';
 import { useOnline } from '../hooks/useOnline';
 import { useAuthStore } from '../stores/authStore';
 import { Can } from './Can';
 
-const NAV_ITEMS = [
+interface NavItem {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  permission?: string;
+  anyOf?: string[];
+}
+
+const NAV_ITEMS: NavItem[] = [
+  {
+    to: '/dashboard',
+    label: 'Dashboard',
+    icon: LayoutDashboard,
+    anyOf: [
+      'dashboard.view_owner',
+      'dashboard.view_operational',
+      'dashboard.view_profit',
+      'dashboard.view_cashier',
+      'dashboard.view_inventory',
+      'dashboard.view_finance',
+    ],
+  },
   {
     to: '/pos',
     label: 'POS Billing',
@@ -15,12 +46,18 @@ const NAV_ITEMS = [
     permission: 'sales.pos_checkout',
   },
   {
+    to: '/invoices',
+    label: 'Invoices',
+    icon: FileText,
+    anyOf: ['sales.view_all_invoices', 'sales.view_own_invoices'],
+  },
+  {
     to: '/inventory',
     label: 'Inventory',
     icon: Package,
     permission: 'inventory.view_products',
   },
-] as const;
+];
 
 export const Layout: React.FC = () => {
   const { user, shop, clearAuth } = useAuthStore();
@@ -56,7 +93,7 @@ export const Layout: React.FC = () => {
       {!isOnline && (
         <div
           role="alert"
-          className="bg-amber-600 text-white px-4 py-2 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 shadow-sm"
+          className="print:hidden bg-amber-600 text-white px-4 py-2 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 shadow-sm"
         >
           <WifiOff className="h-4 w-4 shrink-0" />
           <span>
@@ -66,7 +103,7 @@ export const Layout: React.FC = () => {
       )}
 
       {/* Header Bar */}
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md">
+      <header className="print:hidden sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           {/* Logo & Navigation */}
           <div className="flex items-center gap-8">
@@ -84,22 +121,22 @@ export const Layout: React.FC = () => {
               </div>
             </div>
 
-            <nav className="flex items-center gap-1 sm:gap-2">
+            <nav className="flex items-center gap-1 sm:gap-2 overflow-x-auto">
               {NAV_ITEMS.map((item) => {
                 const Icon = item.icon;
                 return (
-                  <Can key={item.to} permission={item.permission}>
+                  <Can key={item.to} permission={item.permission} anyOf={item.anyOf}>
                     <NavLink
                       to={item.to}
                       className={({ isActive }) =>
-                        `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                        `flex min-h-[44px] items-center gap-2 rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors ${
                           isActive
                             ? 'bg-indigo-50 text-indigo-700 shadow-sm'
                             : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                         }`
                       }
                     >
-                      <Icon className="h-4 w-4" />
+                      <Icon className="h-4 w-4 shrink-0" />
                       <span>{item.label}</span>
                     </NavLink>
                   </Can>

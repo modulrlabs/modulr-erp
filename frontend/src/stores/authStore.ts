@@ -83,7 +83,6 @@ export function normalizeShopProfile(shopData: MeResponse['shop'] | ShopProfile 
 
 /**
  * Role-based default home route helper.
- * OWNER / MANAGER / ACCOUNTANT fall back to /pos until /dashboard is implemented in Step F2.
  */
 export function getDefaultHomeRoute(role?: UserRole): string {
   switch (role) {
@@ -94,6 +93,7 @@ export function getDefaultHomeRoute(role?: UserRole): string {
     case 'OWNER':
     case 'MANAGER':
     case 'ACCOUNTANT':
+      return '/dashboard';
     default:
       return '/pos';
   }
