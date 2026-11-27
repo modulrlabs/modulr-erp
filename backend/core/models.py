@@ -109,11 +109,33 @@ class ShopSettings(models.Model):
         default=False,
         help_text="Grants staff.manage_cashiers_only to MANAGER users."
     )
+    class TaxMode(models.TextChoices):
+        NONE = 'NONE', 'No Tax'
+        INCLUSIVE = 'INCLUSIVE', 'Tax Inclusive'
+        EXCLUSIVE = 'EXCLUSIVE', 'Tax Exclusive'
+
     cashier_max_discount_pct = models.DecimalField(
         max_digits=5,
         decimal_places=2,
         default=Decimal('0.00'),
         help_text="Maximum invoice discount percentage a CASHIER may apply (0.00-100.00)."
+    )
+    tax_mode = models.CharField(
+        max_length=16,
+        choices=TaxMode.choices,
+        default=TaxMode.NONE,
+        help_text="Tax calculation mode applied at POS checkout."
+    )
+    tax_rate_pct = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Tax rate percentage (0.00-100.00)."
+    )
+    tax_label = models.CharField(
+        max_length=32,
+        default='VAT',
+        help_text="Display label for tax on receipts (e.g., VAT, GST, SSCL)."
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

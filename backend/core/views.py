@@ -602,6 +602,9 @@ class ShopSettingsView(generics.RetrieveUpdateAPIView):
             'managers_can_manage_purchasing',
             'managers_can_manage_cashiers',
             'cashier_max_discount_pct',
+            'tax_mode',
+            'tax_rate_pct',
+            'tax_label',
         )
         before_state = {field: getattr(instance, field) for field in tracked_fields}
         updated = serializer.save()

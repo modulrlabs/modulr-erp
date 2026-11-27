@@ -103,6 +103,28 @@ class Invoice(ShopAwareModel):
         default=0.00,
         help_text="Total discount deducted from the sale."
     )
+    tax_mode = models.CharField(
+        max_length=16,
+        default='NONE',
+        help_text="Snapshot of shop tax_mode at checkout time (NONE, INCLUSIVE, EXCLUSIVE)."
+    )
+    tax_rate_pct = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Snapshot of shop tax_rate_pct at checkout time."
+    )
+    tax_label = models.CharField(
+        max_length=32,
+        default='VAT',
+        help_text="Snapshot of shop tax_label at checkout time."
+    )
+    tax_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Computed tax amount for this invoice."
+    )
     total_amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,

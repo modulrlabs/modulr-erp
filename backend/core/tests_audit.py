@@ -197,6 +197,8 @@ class AuditLogTriggerTests(APITestCase):
 
     def test_invoice_creation_and_discount_triggers(self):
         """POS Checkout with discount must generate INVOICE_CREATED and DISCOUNT_APPLIED logs."""
+        self.shop.settings.cashier_max_discount_pct = Decimal('10.00')
+        self.shop.settings.save()
         self.client.force_authenticate(user=self.cashier)
 
         payload = {
