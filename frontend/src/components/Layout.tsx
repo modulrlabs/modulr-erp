@@ -1,6 +1,7 @@
 import React from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
+  CreditCard,
   FileText,
   LayoutDashboard,
   LogOut,
@@ -8,6 +9,7 @@ import {
   ShoppingCart,
   Store,
   User,
+  Users,
   WifiOff,
   type LucideIcon,
 } from 'lucide-react';
@@ -15,6 +17,7 @@ import { apiClient } from '../api/client';
 import { useIdleTimeout } from '../hooks/useIdleTimeout';
 import { useOnline } from '../hooks/useOnline';
 import { useAuthStore } from '../stores/authStore';
+import type { ShopFeatures } from '../types/erp';
 import { Can } from './Can';
 
 interface NavItem {
@@ -23,6 +26,7 @@ interface NavItem {
   icon: LucideIcon;
   permission?: string;
   anyOf?: string[];
+  feature?: keyof ShopFeatures;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -56,6 +60,20 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Inventory',
     icon: Package,
     permission: 'inventory.view_products',
+  },
+  {
+    to: '/customers',
+    label: 'Customers',
+    icon: Users,
+    anyOf: ['credit.view_customers', 'credit.lookup_customers'],
+    feature: 'enable_credit_module',
+  },
+  {
+    to: '/cheques',
+    label: 'PD Cheques',
+    icon: CreditCard,
+    permission: 'cheques.view',
+    feature: 'enable_credit_module',
   },
 ];
 
@@ -123,6 +141,9 @@ export const Layout: React.FC = () => {
 
             <nav className="flex items-center gap-1 sm:gap-2 overflow-x-auto">
               {NAV_ITEMS.map((item) => {
+                if (item.feature && !shop?.features?.[item.feature]) {
+                  return null;
+                }
                 const Icon = item.icon;
                 return (
                   <Can key={item.to} permission={item.permission} anyOf={item.anyOf}>

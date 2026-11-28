@@ -90,6 +90,68 @@ export interface Customer {
   phone: string;
   address?: string;
   total_credit_balance: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreateCustomerPayload {
+  name: string;
+  phone?: string;
+  address?: string;
+}
+
+export type CreditPaymentMethod = 'CASH' | 'BANK_TRANSFER' | 'CHEQUE';
+
+export interface CreditPaymentPayload {
+  customer: number;
+  amount_paid: string;
+  payment_method: CreditPaymentMethod;
+  notes?: string;
+}
+
+export interface CreditPaymentResponse {
+  id: number;
+  public_id: string;
+  customer: number;
+  customer_name: string;
+  amount_paid: string;
+  payment_method: CreditPaymentMethod;
+  notes?: string;
+  received_by: number | null;
+  received_by_name?: string;
+  created_at: string;
+}
+
+export type PDChequeStatus = 'PENDING' | 'CLEARED' | 'BOUNCED';
+
+export interface PDCheque {
+  id: number;
+  public_id: string;
+  customer: number | null;
+  customer_name: string | null;
+  cheque_number: string;
+  bank_name: string;
+  amount: string;
+  due_date: string;
+  status: PDChequeStatus;
+  status_display?: string;
+  notes?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreatePDChequePayload {
+  customer?: number | null;
+  cheque_number: string;
+  bank_name: string;
+  amount: string;
+  due_date: string;
+  notes?: string;
+}
+
+export interface UpdatePDChequeStatusPayload {
+  status: PDChequeStatus;
+  notes?: string;
 }
 
 export interface InvoiceItemResponse {

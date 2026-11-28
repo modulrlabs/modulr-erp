@@ -3,12 +3,14 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 import { apiClient, syncAuthMe } from './api/client';
-import { PermissionGuard, ProtectedRoute, PublicOnlyRoute } from './components/Guards';
+import { FeatureGuard, PermissionGuard, ProtectedRoute, PublicOnlyRoute } from './components/Guards';
 import { Layout } from './components/Layout';
 import { ChangePasswordPage } from './features/auth/ChangePasswordPage';
 import { ForbiddenPage } from './features/auth/ForbiddenPage';
 import { LoginPage } from './features/auth/LoginPage';
 import { RegisterShopPage } from './features/auth/RegisterShopPage';
+import { ChequesPage } from './features/cheques/ChequesPage';
+import { CustomersPage } from './features/customers/CustomersPage';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { InventoryPage } from './features/inventory/InventoryPage';
 import { InvoicesPage } from './features/invoices/InvoicesPage';
@@ -183,6 +185,20 @@ export const App: React.FC = () => {
               </Route>
               <Route element={<PermissionGuard permission="inventory.view_products" />}>
                 <Route path="/inventory" element={<InventoryPage />} />
+              </Route>
+              <Route element={<FeatureGuard feature="enable_credit_module" />}>
+                <Route
+                  element={
+                    <PermissionGuard
+                      anyOf={['credit.view_customers', 'credit.lookup_customers']}
+                    />
+                  }
+                >
+                  <Route path="/customers" element={<CustomersPage />} />
+                </Route>
+                <Route element={<PermissionGuard permission="cheques.view" />}>
+                  <Route path="/cheques" element={<ChequesPage />} />
+                </Route>
               </Route>
               <Route path="/" element={<HomeRedirect />} />
             </Route>
