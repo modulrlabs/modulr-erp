@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { Category, PaginatedResponse, Product } from '../types/erp';
+import type { Category, CsvImportResponse, PaginatedResponse, Product } from '../types/erp';
 
 export interface ProductQueryParams {
   page?: number;
@@ -57,5 +57,20 @@ export async function getCategories(
 
 export async function createCategory(payload: CreateCategoryPayload): Promise<Category> {
   const response = await apiClient.post<Category>('/inventory/categories/', payload);
+  return response.data;
+}
+
+export async function uploadProductsCsv(file: File): Promise<CsvImportResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await apiClient.post<CsvImportResponse>(
+    '/inventory/products/upload-csv/',
+    formData,
+    {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    }
+  );
   return response.data;
 }

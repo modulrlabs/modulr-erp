@@ -12,6 +12,7 @@ import {
   Search,
   Shield,
   Tag,
+  Upload,
   X,
 } from 'lucide-react';
 import {
@@ -21,13 +22,16 @@ import {
   getProducts,
   type CreateProductPayload,
 } from '../../api/inventory';
+import { Can } from '../../components/Can';
 import { usePermission } from '../../hooks/usePermission';
 import { formatLKR, formatMoneyFixed, formatQuantityFixed } from '../../lib/money';
 import type { Category, Product } from '../../types/erp';
+import { CsvImportModal } from './CsvImportModal';
 
 export const InventoryPage: React.FC = () => {
   const canManageProducts = usePermission('inventory.manage_products');
   const canViewCostPrice = usePermission('inventory.view_cost_price');
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState<boolean>(false);
 
   // ---------------------------------------------------------------------------
   // Data & Pagination State
@@ -219,16 +223,38 @@ export const InventoryPage: React.FC = () => {
           </p>
         </div>
 
-        {canManageProducts && (
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition-colors cursor-pointer shrink-0"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Add Product</span>
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <Can permission="inventory.csv_import">
+            <button
+              type="button"
+              onClick={() => setIsCsvModalOpen(true)}
+              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              <Upload className="h-4 w-4" />
+              <span>Import CSV</span>
+            </button>
+          </Can>
+
+          {canManageProducts && (
+            <button
+              onClick={() => setIsAddModalOpen(true)}
+              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition-colors cursor-pointer"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Add Product</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      <CsvImportModal
+        isOpen={isCsvModalOpen}
+        onClose={() => setIsCsvModalOpen(false)}
+        onSuccess={() => {
+          fetchProducts();
+          fetchCategories();
+        }}
+      />
 
       {/* Filter Toolbar */}
       <div className="rounded-xl border border-slate-200/90 bg-white p-4 shadow-sm flex flex-col sm:flex-row gap-3">

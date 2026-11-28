@@ -6,9 +6,11 @@ import {
   LayoutDashboard,
   LogOut,
   Package,
+  Settings,
   ShoppingCart,
   Store,
   User,
+  UserCog,
   Users,
   WifiOff,
   type LucideIcon,
@@ -74,6 +76,18 @@ const NAV_ITEMS: NavItem[] = [
     icon: CreditCard,
     permission: 'cheques.view',
     feature: 'enable_credit_module',
+  },
+  {
+    to: '/staff',
+    label: 'Staff',
+    icon: UserCog,
+    anyOf: ['staff.manage', 'staff.manage_cashiers_only'],
+  },
+  {
+    to: '/settings',
+    label: 'Settings',
+    icon: Settings,
+    anyOf: ['settings.manage_shop', 'audit.view_all', 'audit.view_staff'],
   },
 ];
 
