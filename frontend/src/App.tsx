@@ -15,6 +15,8 @@ import { DashboardPage } from './features/dashboard/DashboardPage';
 import { InventoryPage } from './features/inventory/InventoryPage';
 import { InvoicesPage } from './features/invoices/InvoicesPage';
 import { PosCheckoutPage } from './features/pos/PosCheckoutPage';
+import { SettingsPage } from './features/settings/SettingsPage';
+import { StaffPage } from './features/staff/StaffPage';
 import { getDefaultHomeRoute, useAuthStore } from './stores/authStore';
 import type { MeResponse, ShopProfile, UserProfile } from './types/erp';
 
@@ -199,6 +201,22 @@ export const App: React.FC = () => {
                 <Route element={<PermissionGuard permission="cheques.view" />}>
                   <Route path="/cheques" element={<ChequesPage />} />
                 </Route>
+              </Route>
+              <Route
+                element={
+                  <PermissionGuard anyOf={['staff.manage', 'staff.manage_cashiers_only']} />
+                }
+              >
+                <Route path="/staff" element={<StaffPage />} />
+              </Route>
+              <Route
+                element={
+                  <PermissionGuard
+                    anyOf={['settings.manage_shop', 'audit.view_all', 'audit.view_staff']}
+                  />
+                }
+              >
+                <Route path="/settings" element={<SettingsPage />} />
               </Route>
               <Route path="/" element={<HomeRedirect />} />
             </Route>

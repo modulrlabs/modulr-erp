@@ -346,3 +346,57 @@ export interface RegisterShopPayload {
   first_name?: string;
   last_name?: string;
 }
+
+export interface StaffMember {
+  id: number;
+  public_id: string;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: UserRole;
+  is_active: boolean;
+  must_change_password: boolean;
+  date_joined: string;
+}
+
+export interface CreateStaffPayload {
+  first_name: string;
+  last_name?: string;
+  email?: string;
+  role: UserRole;
+}
+
+export interface CreateStaffResponse extends StaffMember {
+  temporary_password: string;
+}
+
+export interface ResetPasswordResponse {
+  public_id: string;
+  username: string;
+  temporary_password: string;
+  must_change_password: boolean;
+}
+
+export type UpdateShopSettingsPayload = Partial<ShopSettings>;
+
+export interface AuditLogEntry {
+  id: number;
+  public_id: string;
+  actor_username: string;
+  action: string;
+  target_model: string;
+  target_id: string;
+  before_state: Record<string, unknown> | null;
+  after_state: Record<string, unknown> | null;
+  ip_address: string | null;
+  user_agent: string;
+  created_at: string;
+}
+
+export interface CsvImportResponse {
+  message: string;
+  created: number;
+  updated: number;
+  errors: string[];
+}
