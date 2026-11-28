@@ -165,3 +165,5 @@ frontend/coverage/
 *.temp
 *.bak
 .directory
+
+!frontend/src/lib/
