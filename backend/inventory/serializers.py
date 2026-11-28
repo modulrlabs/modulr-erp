@@ -1,4 +1,10 @@
+from decimal import Decimal
+
 from rest_framework import serializers
+
+from core.mixins import validate_tenant_fk
+from core.rbac import get_request_permissions
+
 from .models import Category, Product
 
 
@@ -16,13 +22,14 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = (
             'id',
+            'public_id',
             'name',
             'description',
             'product_count',
             'created_at',
             'updated_at',
         )
-        read_only_fields = ('id', 'created_at', 'updated_at', 'product_count')
+        read_only_fields = ('id', 'public_id', 'created_at', 'updated_at', 'product_count')
 
     def validate_name(self, value):
         """
@@ -34,7 +41,7 @@ class CategorySerializer(serializers.ModelSerializer):
             return value
 
         shop = request.user.shop
-        queryset = Category.objects.filter(shop=shop, name__iexact=value.strip())
+        queryset = Category.objects.filter(shop=shop, name__iexact=value.strip(), is_deleted=False)
 
         # When updating an existing category, exclude itself from duplicate check
         if self.instance:
@@ -68,6 +75,7 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = (
             'id',
+            'public_id',
             'category',
             'category_name',
             'name',
@@ -80,7 +88,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         )
-        read_only_fields = ('id', 'is_low_stock', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'public_id', 'is_low_stock', 'created_at', 'updated_at')
 
     def __init__(self, *args, **kwargs):
         """
@@ -94,8 +102,8 @@ class ProductSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
 
-        # If user is not an Owner (e.g. Cashier), strip cost_price field completely
-        if request and hasattr(request, 'user') and not getattr(request.user, 'is_owner', False):
+        # Strip cost_price completely if user lacks inventory.view_cost_price
+        if request and 'inventory.view_cost_price' not in get_request_permissions(request):
             self.fields.pop('cost_price', None)
 
     def validate_category(self, value):
@@ -104,16 +112,9 @@ class ProductSerializer(serializers.ModelSerializer):
         Prevents IDOR / Foreign Key Spoofing (Rule B from ARCHITECTURE.md).
         A shop owner cannot attach a Category ID that belongs to another shop!
         """
-        if value is None:
-            return value
-
         request = self.context.get('request')
-        if request and hasattr(request, 'user') and request.user.shop:
-            if value.shop != request.user.shop:
-                raise serializers.ValidationError(
-                    "Selected category does not exist in your shop."
-                )
-        return value
+        shop = getattr(getattr(request, 'user', None), 'shop', None)
+        return validate_tenant_fk(value, shop, field_name="category")
 
     def validate_barcode(self, value):
         """
@@ -128,7 +129,7 @@ class ProductSerializer(serializers.ModelSerializer):
             return barcode
 
         shop = request.user.shop
-        queryset = Product.objects.filter(shop=shop, barcode=barcode)
+        queryset = Product.objects.filter(shop=shop, barcode=barcode, is_deleted=False)
 
         # Exclude self when updating
         if self.instance:
@@ -146,14 +147,24 @@ class ProductSerializer(serializers.ModelSerializer):
         WHY: Business Logic Validations:
         - selling_price cannot be negative.
         - cost_price cannot be negative.
+        - stock_quantity cannot be negative.
+        - reorder_level cannot be negative.
         """
         selling_price = attrs.get('selling_price')
-        if selling_price is not None and selling_price < 0:
+        if selling_price is not None and selling_price < Decimal('0.00'):
             raise serializers.ValidationError({"selling_price": "Selling price cannot be negative."})
 
         cost_price = attrs.get('cost_price')
-        if cost_price is not None and cost_price < 0:
+        if cost_price is not None and cost_price < Decimal('0.00'):
             raise serializers.ValidationError({"cost_price": "Cost price cannot be negative."})
+
+        stock_quantity = attrs.get('stock_quantity')
+        if stock_quantity is not None and stock_quantity < Decimal('0.000'):
+            raise serializers.ValidationError({"stock_quantity": "Stock quantity cannot be negative."})
+
+        reorder_level = attrs.get('reorder_level')
+        if reorder_level is not None and reorder_level < Decimal('0.000'):
+            raise serializers.ValidationError({"reorder_level": "Reorder level cannot be negative."})
 
         return attrs
 

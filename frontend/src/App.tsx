@@ -1,122 +1,233 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import React, { useEffect } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import axios from 'axios';
+import { apiClient, syncAuthMe } from './api/client';
+import { FeatureGuard, PermissionGuard, ProtectedRoute, PublicOnlyRoute } from './components/Guards';
+import { Layout } from './components/Layout';
+import { ChangePasswordPage } from './features/auth/ChangePasswordPage';
+import { ForbiddenPage } from './features/auth/ForbiddenPage';
+import { LoginPage } from './features/auth/LoginPage';
+import { RegisterShopPage } from './features/auth/RegisterShopPage';
+import { ChequesPage } from './features/cheques/ChequesPage';
+import { CustomersPage } from './features/customers/CustomersPage';
+import { DashboardPage } from './features/dashboard/DashboardPage';
+import { InventoryPage } from './features/inventory/InventoryPage';
+import { InvoicesPage } from './features/invoices/InvoicesPage';
+import { PosCheckoutPage } from './features/pos/PosCheckoutPage';
+import { SettingsPage } from './features/settings/SettingsPage';
+import { StaffPage } from './features/staff/StaffPage';
+import { getDefaultHomeRoute, useAuthStore } from './stores/authStore';
+import type { MeResponse, ShopProfile, UserProfile } from './types/erp';
 
-function App() {
-  const [count, setCount] = useState(0)
+const AuthFocusSync: React.FC = () => {
+  const isAuthenticated = useAuthStore((s) => Boolean(s.accessToken && s.user));
+
+  useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: syncAuthMe,
+    enabled: isAuthenticated,
+    refetchOnWindowFocus: true,
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  return null;
+};
+
+const HomeRedirect: React.FC = () => {
+  const user = useAuthStore((s) => s.user);
+  return <Navigate to={getDefaultHomeRoute(user?.role)} replace />;
+};
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: true,
+      retry: 1,
+    },
+  },
+});
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
+
+export const App: React.FC = () => {
+  const { isInitialized, setAuth, clearAuth, setInitialized } = useAuthStore();
+
+  useEffect(() => {
+    // -------------------------------------------------------------------------
+    // Silent Session Restore on Application Mount
+    // -------------------------------------------------------------------------
+    // Attempt to rotate tokens via the secure httpOnly cookie (modulr_refresh_token).
+    // If a valid cookie exists, we obtain a fresh access token and load user/tenant profile
+    // without ever storing credentials or JWTs in insecure localStorage.
+    const restoreSession = async () => {
+      try {
+        const refreshResponse = await axios.post<{ access: string }>(
+          `${BASE_URL}/auth/token/refresh/`,
+          {},
+          {
+            withCredentials: true,
+            headers: {
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+          }
+        );
+
+        const newAccessToken = refreshResponse.data.access;
+
+        // Fetch active user details and tenant profile
+        const meResponse = await apiClient.get<MeResponse>('/auth/me/', {
+          headers: {
+            Authorization: `Bearer ${newAccessToken}`,
+          },
+        });
+
+        const meData = meResponse.data;
+        const shopData = meData.shop;
+
+        const normalizedShop: ShopProfile | null = shopData
+          ? {
+              id: shopData.id,
+              public_id: shopData.public_id,
+              name: shopData.name,
+              address: shopData.address,
+              phone: shopData.phone,
+              is_active: shopData.is_active,
+              features: shopData.features || {
+                enable_credit_module: !!shopData.enable_credit_module,
+                enable_whatsapp_alerts: !!shopData.enable_whatsapp_alerts,
+              },
+            }
+          : null;
+
+        const userProfile: UserProfile = {
+          id: meData.id,
+          public_id: meData.public_id,
+          username: meData.username,
+          email: meData.email,
+          first_name: meData.first_name,
+          last_name: meData.last_name,
+          role: meData.role,
+          must_change_password: meData.must_change_password,
+        };
+
+        setAuth(
+          userProfile,
+          normalizedShop,
+          newAccessToken,
+          meData.permissions ?? [],
+          Boolean(meData.must_change_password)
+        );
+      } catch {
+        // No active or valid cookie; user starts in unauthenticated state
+        clearAuth();
+      } finally {
+        setInitialized(true);
+      }
+    };
+
+    restoreSession();
+  }, [setAuth, clearAuth, setInitialized]);
+
+  if (!isInitialized) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+          <p className="text-sm font-semibold text-slate-600">Initializing Modulr ERP...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <QueryClientProvider client={queryClient}>
+      <AuthFocusSync />
+      <BrowserRouter>
+        <Routes>
+          {/* Public Auth Routes */}
+          <Route element={<PublicOnlyRoute />}>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterShopPage />} />
+          </Route>
 
-      <div className="ticks"></div>
+          {/* Protected Application Routes */}
+          <Route element={<ProtectedRoute />}>
+            <Route path="/change-password" element={<ChangePasswordPage />} />
+            <Route path="/forbidden" element={<ForbiddenPage />} />
+            <Route element={<Layout />}>
+              <Route
+                element={
+                  <PermissionGuard
+                    anyOf={[
+                      'dashboard.view_owner',
+                      'dashboard.view_operational',
+                      'dashboard.view_profit',
+                      'dashboard.view_cashier',
+                      'dashboard.view_inventory',
+                      'dashboard.view_finance',
+                    ]}
+                  />
+                }
+              >
+                <Route path="/dashboard" element={<DashboardPage />} />
+              </Route>
+              <Route element={<PermissionGuard permission="sales.pos_checkout" />}>
+                <Route path="/pos" element={<PosCheckoutPage />} />
+              </Route>
+              <Route
+                element={
+                  <PermissionGuard
+                    anyOf={['sales.view_all_invoices', 'sales.view_own_invoices']}
+                  />
+                }
+              >
+                <Route path="/invoices" element={<InvoicesPage />} />
+              </Route>
+              <Route element={<PermissionGuard permission="inventory.view_products" />}>
+                <Route path="/inventory" element={<InventoryPage />} />
+              </Route>
+              <Route element={<FeatureGuard feature="enable_credit_module" />}>
+                <Route
+                  element={
+                    <PermissionGuard
+                      anyOf={['credit.view_customers', 'credit.lookup_customers']}
+                    />
+                  }
+                >
+                  <Route path="/customers" element={<CustomersPage />} />
+                </Route>
+                <Route element={<PermissionGuard permission="cheques.view" />}>
+                  <Route path="/cheques" element={<ChequesPage />} />
+                </Route>
+              </Route>
+              <Route
+                element={
+                  <PermissionGuard anyOf={['staff.manage', 'staff.manage_cashiers_only']} />
+                }
+              >
+                <Route path="/staff" element={<StaffPage />} />
+              </Route>
+              <Route
+                element={
+                  <PermissionGuard
+                    anyOf={['settings.manage_shop', 'audit.view_all', 'audit.view_staff']}
+                  />
+                }
+              >
+                <Route path="/settings" element={<SettingsPage />} />
+              </Route>
+              <Route path="/" element={<HomeRedirect />} />
+            </Route>
+          </Route>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+          {/* Fallback Catch-all Route */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
+};
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
-}
-
-export default App
+export default App;

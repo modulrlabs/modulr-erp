@@ -15,13 +15,21 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path, include
 from django.http import JsonResponse
+from django.urls import include, path
 from drf_spectacular.views import (
     SpectacularAPIView,
-    SpectacularSwaggerView,
     SpectacularRedocView,
+    SpectacularSwaggerView,
 )
+from rest_framework.routers import DefaultRouter
+
+from core.urls import router as core_router
+from core.views import ShopSettingsView, StaffViewSet
+from sales.views import DashboardSummaryView
+
+staff_router = DefaultRouter()
+staff_router.register(r'staff', StaffViewSet, basename='staff')
 
 
 def api_root_view(request):
@@ -42,8 +50,12 @@ def api_root_view(request):
             "auth": {
                 "register": "/api/auth/register/",
                 "login": "/api/auth/login/",
-                "token_refresh": "/api/auth/token/refresh/",
+                "refresh": "/api/auth/token/refresh/",
+                "logout": "/api/auth/logout/",
                 "me": "/api/auth/me/",
+            },
+            "core": {
+                "audit_logs": "/api/core/audit-logs/",
             },
             "inventory": {
                 "categories": "/api/inventory/categories/",
@@ -70,6 +82,10 @@ urlpatterns = [
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     path('api/auth/', include('core.urls')),
+    path('api/', include((staff_router.urls, 'staff'))),
+    path('api/core/shop-settings/', ShopSettingsView.as_view(), name='shop-settings'),
+    path('api/core/', include((core_router.urls, 'core'))),
+    path('api/dashboard/summary/', DashboardSummaryView.as_view(), name='dashboard-summary'),
     path('api/inventory/', include('inventory.urls')),
     path('api/sales/', include('sales.urls')),
 ]

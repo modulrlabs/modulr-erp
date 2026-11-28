@@ -10,9 +10,11 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
-from pathlib import Path
 import os
 from datetime import timedelta
+from pathlib import Path
+
+from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -23,16 +25,27 @@ load_dotenv(BASE_DIR / '.env')
 load_dotenv(BASE_DIR.parent / '.env')
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    """Helper to parse boolean values from environment variables."""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.lower() in ('true', '1', 'yes', 't')
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required.")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool('DEBUG', False)
 
-ALLOWED_HOSTS = []
+raw_allowed_hosts = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver')
+ALLOWED_HOSTS = [h.strip() for h in raw_allowed_hosts.split(',') if h.strip()]
 
 
 # Application definition
@@ -48,8 +61,11 @@ INSTALLED_APPS = [
     # Third-party packages
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
+    'django_filters',
     'drf_spectacular',
+    'axes',
 
     # Local SaaS apps
     'core',
@@ -60,6 +76,11 @@ INSTALLED_APPS = [
 # Custom User Model for SaaS Multi-tenancy
 AUTH_USER_MODEL = 'core.User'
 
+AUTHENTICATION_BACKENDS = [
+    'axes.backends.AxesStandaloneBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -67,8 +88,10 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'core.audit.AuditRequestContextMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'axes.middleware.AxesMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -135,12 +158,18 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+]
+
+
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Colombo'
 
 USE_I18N = True
 
@@ -164,26 +193,37 @@ MAILERS = {
 
 # ------------------------------------------------------------------------------
 # Django REST Framework Configuration
-# WHY:
-# 1. JWTAuthentication as default ensures all incoming requests look for 
-#    'Authorization: Bearer <token>' headers.
-# 2. IsAuthenticated as default locks down all endpoints across the SaaS by default.
-#    Public endpoints (like Login and Register) must explicitly declare AllowAny.
 # ------------------------------------------------------------------------------
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'core.authentication.ShopJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
+        'core.permissions.EnforcePasswordChange',
     ),
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.StandardResultsSetPagination',
+    'DEFAULT_FILTER_BACKENDS': (
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ),
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/min',
+        'user': '300/min',
+        'login': '5/min',
+        'register': '5/hour',
+    },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 # ------------------------------------------------------------------------------
 # drf-spectacular (OpenAPI 3.0 / Swagger UI)
-# WHY:
-# Provides interactive, auto-generated documentation and sandbox for all REST endpoints.
 # ------------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Businezz ERP + POS Multi-Tenant SaaS API',
@@ -195,18 +235,13 @@ SPECTACULAR_SETTINGS = {
 
 # ------------------------------------------------------------------------------
 # SimpleJWT Configuration
-# WHY:
-# - Short-lived Access Token (1 hour): Minimizes damage if a token is intercepted.
-# - Long-lived Refresh Token (7 days): Keeps cashiers and owners logged in without
-#   forcing them to re-enter passwords daily.
-# - Token rotation: Issuing a new refresh token whenever one is refreshed helps detect
-#   token theft.
 # ------------------------------------------------------------------------------
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=10),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': False,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
     'USER_ID_FIELD': 'id',
@@ -214,10 +249,46 @@ SIMPLE_JWT = {
 }
 
 # ------------------------------------------------------------------------------
-# CORS Configuration (Cross-Origin Resource Sharing)
-# WHY:
-# The React/Vite frontend runs on a different port (e.g., http://localhost:5173).
-# Browsers block cross-origin requests unless the backend explicitly permits them.
+# django-axes (Brute-Force Attack Prevention)
 # ------------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+AXES_FAILURE_LIMIT = 5
+AXES_COOLOFF_TIME = timedelta(minutes=15)
+AXES_LOCKOUT_PARAMETERS = [['username', 'ip_address']]
+AXES_RESET_ON_SUCCESS = True
+
+# ------------------------------------------------------------------------------
+# CORS & CSRF Configuration (Cross-Origin Resource Sharing)
+# ------------------------------------------------------------------------------
+CORS_ALLOW_HEADERS = [
+    *default_headers,
+    'idempotency-key',
+]
+
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_CREDENTIALS = True
+
+cors_origins_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+if cors_origins_env:
+    CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()]
+else:
+    CORS_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
+
+csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
+if csrf_origins_env:
+    CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()]
+else:
+    CSRF_TRUSTED_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
+
+# ------------------------------------------------------------------------------
+# Authentication & Cookie Hardening
+# ------------------------------------------------------------------------------
+AUTH_REFRESH_COOKIE_NAME = 'modulr_refresh_token'
+AUTH_REFRESH_COOKIE_PATH = '/api/auth/'
+AUTH_REFRESH_IN_BODY = env_bool('AUTH_REFRESH_IN_BODY', False)
+COOKIE_SECURE = env_bool('COOKIE_SECURE', not DEBUG)
+COOKIE_SAMESITE = os.environ.get('COOKIE_SAMESITE', 'Lax')
+SESSION_COOKIE_SECURE = COOKIE_SECURE
+CSRF_COOKIE_SECURE = COOKIE_SECURE
+SESSION_COOKIE_SAMESITE = COOKIE_SAMESITE
+CSRF_COOKIE_SAMESITE = COOKIE_SAMESITE
 

@@ -1,93 +1,167 @@
 import csv
 import io
 from decimal import Decimal, InvalidOperation
-from django.db import transaction, models
-from django.db.models import Q, F
-from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser
 
-from .models import Category, Product
+from django.db import transaction
+from rest_framework import permissions, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.response import Response
+
+from core.audit import log_audit_event
+from core.mixins import ShopScopedViewSetMixin, SoftDeleteViewSetMixin
+from core.permissions import HasPermission
+
+from .filters import ProductFilter
+from .models import Category, Product, StockMovement
 from .serializers import (
     CategorySerializer,
-    ProductSerializer,
     ProductCSVUploadSerializer,
+    ProductSerializer,
 )
-from .permissions import IsShopOwnerOrReadOnly, IsShopOwner
 
 
-class CategoryViewSet(viewsets.ModelViewSet):
+class CategoryViewSet(SoftDeleteViewSetMixin, ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing product categories.
-    - Read (GET): Allowed for both Cashiers and Owners.
-    - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    - Read (GET): Requires `inventory.view_products`.
+    - Write / Soft Delete / Restore: Requires `inventory.manage_products`.
+    - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
+    queryset = Category.objects.all()
     serializer_class = CategorySerializer
-    permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
-
-    def get_queryset(self):
-        """
-        WHY: Multi-tenancy rule (ARCHITECTURE.md Rule 1).
-        All category queries are strictly restricted to the authenticated user's shop.
-        """
-        user = self.request.user
-        if not user or not user.is_authenticated or not user.shop:
-            return Category.objects.none()
-        return Category.objects.filter(shop=user.shop)
-
-    def perform_create(self, serializer):
-        """
-        WHY: Securely attach the active shop from the user session,
-        preventing client manipulation of tenant ownership.
-        """
-        serializer.save(shop=self.request.user.shop)
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    search_fields = ['name']
+    ordering_fields = ['name', 'created_at']
+    ordering = ['name']
+    action_permissions = {
+        'list': 'inventory.view_products',
+        'retrieve': 'inventory.view_products',
+        'create': 'inventory.manage_products',
+        'update': 'inventory.manage_products',
+        'partial_update': 'inventory.manage_products',
+        'destroy': 'inventory.manage_products',
+        'restore': 'inventory.manage_products',
+    }
 
 
-class ProductViewSet(viewsets.ModelViewSet):
+class ProductViewSet(SoftDeleteViewSetMixin, ShopScopedViewSetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing products, barcode lookups, and bulk CSV imports.
-    - Read (GET): Allowed for both Cashiers and Owners.
-    - Write (POST, PUT, PATCH, DELETE): Restricted to Owners.
+    - Read / by_barcode: Requires `inventory.view_products`.
+    - Create / Update / Soft Delete / Restore: Requires `inventory.manage_products`.
+    - upload_csv: Requires `inventory.csv_import`.
+    - Tenant Isolation: Scoped to request.user.shop via ShopScopedViewSetMixin.
     """
+    queryset = Product.objects.all().select_related('category')
     serializer_class = ProductSerializer
-    permission_classes = [permissions.IsAuthenticated, IsShopOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    filterset_class = ProductFilter
+    search_fields = ['name', 'barcode']
+    ordering_fields = ['name', 'selling_price', 'stock_quantity', 'created_at']
+    ordering = ['name']
+    action_permissions = {
+        'list': 'inventory.view_products',
+        'retrieve': 'inventory.view_products',
+        'by_barcode': 'inventory.view_products',
+        'create': 'inventory.manage_products',
+        'update': 'inventory.manage_products',
+        'partial_update': 'inventory.manage_products',
+        'destroy': 'inventory.manage_products',
+        'restore': 'inventory.manage_products',
+        'adjust_stock': 'inventory.adjust_stock',
+        'upload_csv': 'inventory.csv_import',
+    }
 
     def get_queryset(self):
-        """
-        WHY: Multi-tenancy query scoping with flexible search and filters for POS.
-        """
-        user = self.request.user
-        if not user or not user.is_authenticated or not user.shop:
-            return Product.objects.none()
-
-        queryset = Product.objects.filter(shop=user.shop).select_related('category')
-
-        # 1. Text Search (searches name OR barcode)
-        search_query = self.request.query_params.get('search', '').strip()
-        if search_query:
-            queryset = queryset.filter(
-                Q(name__icontains=search_query) |
-                Q(barcode__icontains=search_query)
-            )
-
-        # 2. Filter by Category
+        queryset = super().get_queryset()
         category_id = self.request.query_params.get('category')
         if category_id:
             queryset = queryset.filter(category_id=category_id)
-
-        # 3. Filter Low Stock Items (useful for inventory management)
-        low_stock = self.request.query_params.get('low_stock', '').lower()
-        if low_stock in ('true', '1'):
-            queryset = queryset.filter(stock_quantity__lte=F('reorder_level'))
-
         return queryset
 
     def perform_create(self, serializer):
         """
-        WHY: Ensure newly created product belongs to the user's shop.
+        Record PRODUCT_CREATED audit event and INITIAL_STOCK ledger entry upon creation.
         """
-        serializer.save(shop=self.request.user.shop)
+        super().perform_create(serializer)
+        product = serializer.instance
+
+        if product.stock_quantity > Decimal('0.000'):
+            StockMovement.objects.create(
+                shop=product.shop,
+                product=product,
+                movement_type=StockMovement.MovementType.INITIAL_STOCK,
+                quantity_change=product.stock_quantity,
+                balance_after=product.stock_quantity,
+                reference_type='Product',
+                reference_id=str(product.public_id),
+                notes="Initial stock on product creation",
+                performed_by=self.request.user,
+            )
+
+        log_audit_event(
+            action='PRODUCT_CREATED',
+            target_model='Product',
+            target_id=str(product.public_id),
+            shop=product.shop,
+            actor=self.request.user,
+            after_state={
+                'name': product.name,
+                'barcode': product.barcode,
+                'cost_price': product.cost_price,
+                'selling_price': product.selling_price,
+                'stock_quantity': product.stock_quantity,
+            }
+        )
+
+    def perform_update(self, serializer):
+        """
+        Record PRODUCT_PRICE_CHANGED and PRODUCT_STOCK_CHANGED audit events,
+        and log ADJUSTMENT in StockMovement if stock was modified.
+        """
+        instance = self.get_object()
+        old_cost = instance.cost_price
+        old_selling = instance.selling_price
+        old_stock = instance.stock_quantity
+
+        super().perform_update(serializer)
+        product = serializer.instance
+
+        if old_cost != product.cost_price or old_selling != product.selling_price:
+            log_audit_event(
+                action='PRODUCT_PRICE_CHANGED',
+                target_model='Product',
+                target_id=str(product.public_id),
+                shop=product.shop,
+                actor=self.request.user,
+                before_state={'cost_price': old_cost, 'selling_price': old_selling},
+                after_state={'cost_price': product.cost_price, 'selling_price': product.selling_price},
+            )
+
+        if old_stock != product.stock_quantity:
+            delta = product.stock_quantity - old_stock
+            StockMovement.objects.create(
+                shop=product.shop,
+                product=product,
+                movement_type=StockMovement.MovementType.ADJUSTMENT,
+                quantity_change=delta,
+                balance_after=product.stock_quantity,
+                reference_type='Product',
+                reference_id=str(product.public_id),
+                notes="Manual inventory adjustment",
+                performed_by=self.request.user,
+            )
+            log_audit_event(
+                action='PRODUCT_STOCK_CHANGED',
+                target_model='Product',
+                target_id=str(product.public_id),
+                shop=product.shop,
+                actor=self.request.user,
+                before_state={'stock_quantity': old_stock},
+                after_state={'stock_quantity': product.stock_quantity},
+            )
 
     @action(detail=False, methods=['get'], url_path='by-barcode')
     def by_barcode(self, request):
@@ -98,6 +172,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         WHY:
         When a cashier scans an item with a handheld barcode scanner, the POS UI
         needs an instantaneous response without paginating through a general list.
+        Scoped strictly through self.get_queryset() to prevent cross-tenant leakage.
         """
         barcode = request.query_params.get('code', '').strip()
 
@@ -119,10 +194,73 @@ class ProductViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(
+        detail=True,
+        methods=['post'],
+        url_path='adjust-stock',
+        permission_classes=[permissions.IsAuthenticated, HasPermission],
+    )
+    def adjust_stock(self, request, public_id=None):
+        """
+        Dedicated stock adjustment endpoint (`POST /api/inventory/products/{public_id}/adjust-stock/`),
+        guarded by `inventory.adjust_stock`.
+        """
+        product = self.get_object()
+        raw_qty = request.data.get('stock_quantity')
+        if raw_qty is None:
+            return Response(
+                {"detail": "'stock_quantity' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            new_stock = Decimal(str(raw_qty))
+        except InvalidOperation:
+            return Response(
+                {"detail": "Invalid decimal format for 'stock_quantity'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if new_stock < Decimal('0.000'):
+            return Response(
+                {"detail": "Stock quantity cannot be negative."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        notes = str(request.data.get('notes', 'Manual stock adjustment'))[:255]
+        with transaction.atomic():
+            locked = Product.objects.select_for_update().get(id=product.id, shop=request.user.shop)
+            old_stock = locked.stock_quantity
+            if old_stock != new_stock:
+                locked.stock_quantity = new_stock
+                locked.save(update_fields=['stock_quantity', 'updated_at'])
+                StockMovement.objects.create(
+                    shop=request.user.shop,
+                    product=locked,
+                    movement_type=StockMovement.MovementType.ADJUSTMENT,
+                    quantity_change=new_stock - old_stock,
+                    balance_after=new_stock,
+                    reference_type='Product',
+                    reference_id=str(locked.public_id),
+                    notes=notes,
+                    performed_by=request.user,
+                )
+                log_audit_event(
+                    action='PRODUCT_STOCK_CHANGED',
+                    target_model='Product',
+                    target_id=str(locked.public_id),
+                    shop=request.user.shop,
+                    actor=request.user,
+                    before_state={'stock_quantity': old_stock},
+                    after_state={'stock_quantity': new_stock},
+                )
+
+        return Response(self.get_serializer(locked).data, status=status.HTTP_200_OK)
+
+    @action(
         detail=False,
         methods=['post'],
         url_path='upload-csv',
-        permission_classes=[permissions.IsAuthenticated, IsShopOwner],
+        permission_classes=[permissions.IsAuthenticated, HasPermission],
         parser_classes=[MultiPartParser, FormParser]
     )
     def upload_csv(self, request):
@@ -138,11 +276,14 @@ class ProductViewSet(viewsets.ModelViewSet):
         error occurs halfway through, we can report clean feedback without leaving
         partially imported inventory in an inconsistent state.
         """
+        shop = getattr(request.user, 'shop', None)
+        if not shop or not shop.is_active:
+            raise PermissionDenied("Active shop membership required.")
+
         upload_serializer = ProductCSVUploadSerializer(data=request.data)
         upload_serializer.is_valid(raise_exception=True)
 
         csv_file = upload_serializer.validated_data['file']
-        shop = request.user.shop
 
         try:
             # Decode CSV content into text
@@ -181,8 +322,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 try:
                     selling_price = Decimal(row_cleaned.get('selling_price', '0.00'))
                     cost_price = Decimal(row_cleaned.get('cost_price', '0.00'))
-                    stock_quantity = int(row_cleaned.get('stock_quantity', '0'))
-                    reorder_level = int(row_cleaned.get('reorder_level', '5'))
+                    stock_quantity = Decimal(row_cleaned.get('stock_quantity', '0.000'))
+                    reorder_level = Decimal(row_cleaned.get('reorder_level', '5.000'))
                 except (InvalidOperation, ValueError):
                     errors.append(f"Row {row_idx} ({name}): Invalid numerical format in price or quantity.")
                     continue
@@ -192,15 +333,21 @@ class ProductViewSet(viewsets.ModelViewSet):
                 if category_name:
                     category_instance, _ = Category.objects.get_or_create(
                         shop=shop,
-                        name=category_name
+                        name=category_name,
+                        is_deleted=False,
                     )
 
-                # Upsert Product: If barcode matches existing product in this shop, update it
+                # Upsert Product: If barcode matches existing active product in this shop, update it
                 product = None
                 if barcode:
-                    product = Product.objects.filter(shop=shop, barcode=barcode).first()
+                    product = Product.objects.filter(
+                        shop=shop,
+                        barcode=barcode,
+                        is_deleted=False,
+                    ).first()
 
                 if product:
+                    old_stock = product.stock_quantity
                     # Update existing product
                     product.name = name
                     product.category = category_instance
@@ -209,10 +356,23 @@ class ProductViewSet(viewsets.ModelViewSet):
                     product.stock_quantity = stock_quantity
                     product.reorder_level = reorder_level
                     product.save()
+
+                    if old_stock != stock_quantity:
+                        StockMovement.objects.create(
+                            shop=shop,
+                            product=product,
+                            movement_type=StockMovement.MovementType.CSV_IMPORT,
+                            quantity_change=stock_quantity - old_stock,
+                            balance_after=stock_quantity,
+                            reference_type='Product',
+                            reference_id=str(product.public_id),
+                            notes="Stock updated via CSV import",
+                            performed_by=request.user,
+                        )
                     updated_count += 1
                 else:
                     # Create new product
-                    Product.objects.create(
+                    new_product = Product.objects.create(
                         shop=shop,
                         category=category_instance,
                         name=name,
@@ -222,7 +382,31 @@ class ProductViewSet(viewsets.ModelViewSet):
                         stock_quantity=stock_quantity,
                         reorder_level=reorder_level,
                     )
+                    if new_product.stock_quantity > Decimal('0.000'):
+                        StockMovement.objects.create(
+                            shop=shop,
+                            product=new_product,
+                            movement_type=StockMovement.MovementType.CSV_IMPORT,
+                            quantity_change=new_product.stock_quantity,
+                            balance_after=new_product.stock_quantity,
+                            reference_type='Product',
+                            reference_id=str(new_product.public_id),
+                            notes="Initial stock from CSV import",
+                            performed_by=request.user,
+                        )
                     created_count += 1
+
+        log_audit_event(
+            action='CSV_IMPORT',
+            target_model='Product',
+            shop=shop,
+            actor=request.user,
+            after_state={
+                'created_count': created_count,
+                'updated_count': updated_count,
+                'error_count': len(errors),
+            }
+        )
 
         return Response({
             "message": "CSV inventory processing completed.",
